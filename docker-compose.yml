@@ -1,0 +1,70 @@
+services:
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: ss-mvp-v1-backend:latest
+    container_name: ss-mvp-v1-backend
+
+    ports:
+      - "8000:8000"
+
+    env_file:
+      - .env
+
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+
+    volumes:
+      - ./app:/app/app
+
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+    networks:
+      - ss-mvp-v1-network
+
+
+  mongo:
+    image: mongo:7
+    container_name: ss-mvp-v1-mongo
+
+    restart: unless-stopped
+
+    ports:
+      - "27017:27017"
+
+    volumes:
+      - ss_mvp_v1_mongo_data:/data/db
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "db.adminCommand('ping')"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    networks:
+      - ss-mvp-v1-network
+
+
+volumes:
+  ss_mvp_v1_mongo_data:
+    driver: local
+
+
+networks:
+  ss-mvp-v1-network:
+    driver: bridge
