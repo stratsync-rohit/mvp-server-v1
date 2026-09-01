@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     n8n_request_timeout_seconds: float = Field(
         default=30, alias="N8N_REQUEST_TIMEOUT_SECONDS"
     )
+    slack_request_timeout_seconds: float = Field(
+        default=10, alias="SLACK_REQUEST_TIMEOUT_SECONDS"
+    )
 
     # --- CORS ---
     cors_origins: str = Field(
@@ -59,6 +62,13 @@ class Settings(BaseSettings):
     def _positive_timeout(cls, v: float) -> float:
         if v <= 0:
             raise ValueError("N8N_REQUEST_TIMEOUT_SECONDS must be positive")
+        return v
+
+    @field_validator("slack_request_timeout_seconds")
+    @classmethod
+    def _positive_slack_timeout(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("SLACK_REQUEST_TIMEOUT_SECONDS must be positive")
         return v
 
 

@@ -66,3 +66,11 @@ class UpstreamConfigurationError(UpstreamError):
 
     def __init__(self, message: str):
         super().__init__(message, error_code="n8n_config_missing")
+
+
+class SlackWebhookError(AppError):
+    status_code = 502
+
+
+class SlackWebhookTimeoutError(SlackWebhookError):
+    status_code = 504

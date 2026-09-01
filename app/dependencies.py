@@ -16,6 +16,7 @@ from app.repositories.client_repository import ClientRepository
 from app.repositories.industry_repository import IndustryRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.risk_repository import RiskRepository
+from app.repositories.slack_destination_repository import SlackDestinationRepository
 from app.repositories.teams_channel_repository import TeamsChannelRepository
 from app.services.client_service import ClientService
 from app.services.dashboard_service import DashboardService
@@ -23,6 +24,7 @@ from app.services.industry_service import IndustryService
 from app.services.n8n_service import N8nService
 from app.services.notification_service import NotificationService
 from app.services.risk_service import RiskService
+from app.services.slack_webhook_service import SlackWebhookService
 from app.services.teams_channel_service import TeamsChannelService
 
 
@@ -36,6 +38,12 @@ def get_teams_channel_repository(
     database: AsyncIOMotorDatabase = Depends(get_database),
 ) -> TeamsChannelRepository:
     return TeamsChannelRepository(database)
+
+
+def get_slack_destination_repository(
+    database: AsyncIOMotorDatabase = Depends(get_database),
+) -> SlackDestinationRepository:
+    return SlackDestinationRepository(database)
 
 
 def get_risk_repository(
@@ -105,6 +113,12 @@ def get_teams_channel_service(
 
 def get_n8n_service(settings: Settings = Depends(get_settings)) -> N8nService:
     return N8nService(settings)
+
+
+def get_slack_webhook_service(
+    settings: Settings = Depends(get_settings),
+) -> SlackWebhookService:
+    return SlackWebhookService(settings.slack_request_timeout_seconds)
 
 
 def get_notification_service(

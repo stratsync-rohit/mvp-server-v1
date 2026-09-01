@@ -10,6 +10,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.industries import router as industries_router
 from app.api.notifications import router as notifications_router
 from app.api.risks import router as risks_router
+from app.api.slack_destinations import router as slack_destinations_router
 from app.api.teams_channels import router as teams_channels_router
 
 from app.config import get_settings
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
 
     app.include_router(clients_router)
     app.include_router(teams_channels_router)
+    app.include_router(slack_destinations_router)
     app.include_router(industries_router)
     app.include_router(risks_router)
     app.include_router(notifications_router)
