@@ -24,7 +24,6 @@ from app.services.industry_service import IndustryService
 from app.services.n8n_service import N8nService
 from app.services.notification_service import NotificationService
 from app.services.risk_service import RiskService
-from app.services.slack_interaction_service import SlackInteractionService
 from app.services.teams_channel_service import TeamsChannelService
 
 
@@ -119,20 +118,6 @@ def get_slack_n8n_service(
     settings: Settings = Depends(get_settings),
 ) -> N8nService:
     return N8nService(settings, webhook_url=settings.slack_n8n_webhook_url)
-
-
-def get_slack_interaction_service(
-    settings: Settings = Depends(get_settings),
-) -> SlackInteractionService:
-    return SlackInteractionService(settings)
-
-
-def get_slack_interaction_n8n_service(
-    settings: Settings = Depends(get_settings),
-) -> N8nService:
-    return N8nService(
-        settings, webhook_url=settings.slack_interaction_n8n_url
-    )
 
 
 def get_notification_service(
