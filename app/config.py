@@ -36,6 +36,18 @@ class Settings(BaseSettings):
         default=None,
         alias="N8N_NOTIFICATION_WEBHOOK_URL",
     )
+    slack_n8n_webhook_url: str | None = Field(
+        default=None,
+        alias="SLACK_N8N_WEBHOOK_URL",
+    )
+    slack_interaction_n8n_url: str | None = Field(
+        default=None,
+        alias="SLACK_INTERACTION_N8N_URL",
+    )
+    slack_signing_secret: str | None = Field(
+        default=None,
+        alias="SLACK_SIGNING_SECRET",
+    )
     n8n_request_timeout_seconds: float = Field(
         default=30, alias="N8N_REQUEST_TIMEOUT_SECONDS"
     )

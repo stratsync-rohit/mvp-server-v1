@@ -74,3 +74,15 @@ class SlackWebhookError(AppError):
 
 class SlackWebhookTimeoutError(SlackWebhookError):
     status_code = 504
+
+
+class SlackInteractionValidationError(AppError):
+    status_code = 400
+
+
+class SlackSignatureVerificationError(AppError):
+    status_code = 401
+
+
+class SlackInteractionConfigurationError(AppError):
+    status_code = 503

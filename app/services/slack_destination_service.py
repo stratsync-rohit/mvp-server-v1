@@ -11,17 +11,19 @@ from app.utils.slack_url_parser import (
 
 logger = logging.getLogger(__name__)
 
+SLACK_TEST_MESSAGE = "StratSync Slack integration test successful."
+
 
 class SlackDestinationService:
     def __init__(
         self,
         slack_destination_repository,
         client_repository,
-        slack_webhook_service=None,
+        slack_n8n_service=None,
     ):
         self.slack_destination_repository = slack_destination_repository
         self.client_repository = client_repository
-        self.slack_webhook_service = slack_webhook_service
+        self.slack_n8n_service = slack_n8n_service
 
     @staticmethod
     def _parse_channel_link(channel_link: str) -> tuple[str, str, str]:
@@ -192,7 +194,18 @@ class SlackDestinationService:
         webhook_url = destination.get("webhook_url")
         if not webhook_url:
             raise ValueError("Slack webhook is not configured")
-        if self.slack_webhook_service is None:
-            raise RuntimeError("Slack webhook service is not configured")
+        if self.slack_n8n_service is None:
+            raise RuntimeError("Slack notification service is not configured")
 
-        await self.slack_webhook_service.send_test_message(webhook_url)
+        payload = {
+            "platform": "slack",
+            "mode": "test",
+            "destination_id": str(destination["_id"]),
+            "client_id": str(destination["client_id"]),
+            "workspace_domain": destination["workspace_domain"],
+            "channel_id": destination["channel_id"],
+            "channel_name": destination["channel_name"],
+            "slack_webhook_url": webhook_url,
+            "message": SLACK_TEST_MESSAGE,
+        }
+        await self.slack_n8n_service.trigger_notification(payload)

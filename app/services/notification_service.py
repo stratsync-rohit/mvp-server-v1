@@ -1,3 +1,5 @@
+from bson import ObjectId
+
 from app.exceptions import (
     ConflictError,
     InactiveResourceError,
@@ -16,32 +18,54 @@ class NotificationService:
         notification_repository,
         risk_repository,
         teams_channel_repository,
+        slack_destination_repository,
         client_repository,
-        n8n_service
+        n8n_service,
+        slack_n8n_service,
     ):
         self.notification_repository = notification_repository
         self.risk_repository = risk_repository
         self.teams_channel_repository = teams_channel_repository
+        self.slack_destination_repository = slack_destination_repository
         self.client_repository = client_repository
         self.n8n_service = n8n_service
+        self.slack_n8n_service = slack_n8n_service
+
+    async def _resolve_destination(self, destination_id: str):
+        if not ObjectId.is_valid(destination_id):
+            raise NotFoundError("Destination not found")
+
+        teams_destination = await self.teams_channel_repository.get_by_id(
+            destination_id
+        )
+        if teams_destination is not None:
+            return "teams", teams_destination
+
+        slack_destination = await self.slack_destination_repository.get_by_id(
+            destination_id
+        )
+        if slack_destination is not None:
+            return "slack", slack_destination
+
+        raise NotFoundError("Destination not found")
 
     async def trigger_notification(
         self,
         risk_id: str,
         destination_id: str
     ):
+        platform, destination = await self._resolve_destination(
+            destination_id
+        )
+
+        if not destination.get("is_active", True):
+            raise InactiveResourceError(
+                f"{platform.title()} destination is inactive"
+            )
+
         risk = await self.risk_repository.get_risk_by_id(risk_id)
         if risk is None:
             raise NotFoundError("Risk not found")
-
-        destination = await self.teams_channel_repository.get_by_id(
-            destination_id
-        )
-        if destination is None:
-            raise NotFoundError("Teams destination not found")
-
-        if not destination.get("is_active", True):
-            raise InactiveResourceError("Teams destination is inactive")
 
         client = await self.client_repository.get_client_by_id(
             str(destination["client_id"])
@@ -51,9 +75,14 @@ class NotificationService:
         if not client.get("is_active", True):
             raise InactiveResourceError("Client is inactive")
 
-        teams_webhook_url = destination.get("teams_webhook_url")
-        if not teams_webhook_url:
-            raise InactiveResourceError("Teams webhook is not configured")
+        if platform == "teams":
+            destination_webhook_url = destination.get("teams_webhook_url")
+            if not destination_webhook_url:
+                raise InactiveResourceError("Teams webhook is not configured")
+        else:
+            destination_webhook_url = destination.get("webhook_url")
+            if not destination_webhook_url:
+                raise InactiveResourceError("Slack webhook is not configured")
 
         guard_acquired = (
             await self.notification_repository.acquire_duplicate_guard(
@@ -66,7 +95,7 @@ class NotificationService:
                 "Notification was already triggered recently"
             )
 
-        notification = await self.notification_repository.create_notification({
+        notification_data = {
             "risk_id": risk_id,
             "destination_id": destination["_id"],
             "client_id": destination["client_id"],
@@ -75,17 +104,36 @@ class NotificationService:
             "risk_title": risk.get("title") or "",
             "severity": risk.get("severity"),
             "status": "pending"
-        })
+        }
+        if platform == "slack":
+            notification_data["platform"] = "slack"
+        notification = await self.notification_repository.create_notification(
+            notification_data
+        )
 
         risk_payload = serialize_mongo_document(risk)
         risk_payload.pop("id", None)
-        payload = {
-            "teams_webhook_url": teams_webhook_url,
-            "risk": risk_payload
-        }
+        if platform == "teams":
+            payload = {
+                "teams_webhook_url": destination_webhook_url,
+                "risk": risk_payload
+            }
+            delivery_service = self.n8n_service
+        else:
+            payload = {
+                "platform": "slack",
+                "destination_id": str(destination["_id"]),
+                "client_id": str(destination["client_id"]),
+                "workspace_domain": destination["workspace_domain"],
+                "channel_id": destination["channel_id"],
+                "channel_name": destination["channel_name"],
+                "slack_webhook_url": destination_webhook_url,
+                "risk": risk_payload,
+            }
+            delivery_service = self.slack_n8n_service
 
         try:
-            await self.n8n_service.trigger_notification(payload)
+            await delivery_service.trigger_notification(payload)
         except UpstreamTimeoutError:
             await self.notification_repository.mark_failed(
                 notification["_id"], "n8n_timeout"

@@ -21,6 +21,8 @@ VALID_CHANNEL_URL = (
     "&tenantId=7f301234-dddd-eeee-ffff-444455556666"
 )
 WEBHOOK = "https://prod-a.logic.azure.com/workflows/private-secret"
+SLACK_CHANNEL_LINK = "https://stratsyncworkspace.slack.com/archives/C0BMC4NDPKJ"
+SLACK_WEBHOOK = "https://hooks.slack.com/services/T000/B000/slack-secret"
 
 
 async def _create_client(client, code="ABC-001") -> str:
@@ -43,6 +45,20 @@ async def _create_channel(client, client_id: str, webhook=WEBHOOK) -> str:
     return response.json()["data"]["id"]
 
 
+async def _create_slack_destination(
+    client, client_id: str, webhook=SLACK_WEBHOOK
+) -> str:
+    response = await client.post(
+        f"/api/clients/{client_id}/slack/channels",
+        json={
+            "channel_link": SLACK_CHANNEL_LINK,
+            "channel_name": "risk-alerts",
+            "webhook_url": webhook,
+        },
+    )
+    return response.json()["data"]["id"]
+
+
 async def _trigger(client, destination_id: str, risk_id="RSK-21132-0472"):
     return await client.post(
         "/api/notifications/trigger",
@@ -51,7 +67,7 @@ async def _trigger(client, destination_id: str, risk_id="RSK-21132-0472"):
 
 
 async def test_notification_trigger_success_and_history_created(
-    client, mongo_db, mock_n8n_service
+    client, mongo_db, mock_n8n_service, mock_slack_n8n_service
 ):
     client_id = await _create_client(client)
     destination_id = await _create_channel(client, client_id)
@@ -108,6 +124,82 @@ async def test_notification_trigger_success_and_history_created(
     assert history["client_id"] == ObjectId(client_id)
     assert "teams_webhook_url" not in history
     assert "sent_at" in history
+    assert "platform" not in history
+    mock_slack_n8n_service.trigger_notification.assert_not_awaited()
+
+
+async def test_slack_notification_resolves_and_sends_full_safe_payload(
+    client, mongo_db, mock_n8n_service, mock_slack_n8n_service, caplog
+):
+    client_id = await _create_client(client)
+    destination_id = await _create_slack_destination(client, client_id)
+    nested_id = ObjectId()
+    await mongo_db["risks"].update_one(
+        {"risk_id": "RSK-21132-0472"},
+        {
+            "$set": {
+                "severity": "critical",
+                "metrics": [{"label": "Exposure", "value": "$125,000"}],
+                "nested": {"owner_id": nested_id},
+            }
+        },
+    )
+
+    response = await _trigger(client, destination_id)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "message": "Notification sent successfully",
+        "data": {
+            "notification_id": response.json()["data"]["notification_id"],
+            "risk_id": "RSK-21132-0472",
+            "destination_id": destination_id,
+            "team_name": "",
+            "channel_name": "risk-alerts",
+            "status": "sent",
+            "sent_at": response.json()["data"]["sent_at"],
+        },
+    }
+    assert "slack_webhook_url" not in response.text
+    assert "slack-secret" not in response.text
+    assert "slack-secret" not in caplog.text
+    mock_n8n_service.trigger_notification.assert_not_awaited()
+    mock_slack_n8n_service.trigger_notification.assert_awaited_once()
+
+    payload = mock_slack_n8n_service.trigger_notification.call_args.args[0]
+    assert set(payload) == {
+        "platform",
+        "destination_id",
+        "client_id",
+        "workspace_domain",
+        "channel_id",
+        "channel_name",
+        "slack_webhook_url",
+        "risk",
+    }
+    assert payload["platform"] == "slack"
+    assert payload["destination_id"] == destination_id
+    assert payload["client_id"] == client_id
+    assert payload["workspace_domain"] == "stratsyncworkspace"
+    assert payload["channel_id"] == "C0BMC4NDPKJ"
+    assert payload["channel_name"] == "risk-alerts"
+    assert payload["slack_webhook_url"] == SLACK_WEBHOOK
+    assert payload["risk"]["risk_id"] == "RSK-21132-0472"
+    assert payload["risk"]["metrics"] == [
+        {"label": "Exposure", "value": "$125,000"}
+    ]
+    assert payload["risk"]["nested"]["owner_id"] == str(nested_id)
+    assert "_id" not in payload["risk"]
+    assert "id" not in payload["risk"]
+
+    history = await mongo_db["notifications"].find_one(
+        {"_id": ObjectId(response.json()["data"]["notification_id"])}
+    )
+    assert history["platform"] == "slack"
+    assert history["status"] == "sent"
+    assert "webhook_url" not in history
+    assert "slack_webhook_url" not in history
 
 
 async def test_notification_request_accepts_only_ids(client):
@@ -142,8 +234,18 @@ async def test_notification_risk_not_found(client, mock_n8n_service):
 async def test_notification_destination_not_found(client, mock_n8n_service):
     response = await _trigger(client, str(ObjectId()))
     assert response.status_code == 404
-    assert response.json() == {"detail": "Teams destination not found"}
+    assert response.json() == {"detail": "Destination not found"}
     mock_n8n_service.trigger_notification.assert_not_awaited()
+
+
+async def test_notification_invalid_destination_id_is_platform_neutral(
+    client, mock_n8n_service, mock_slack_n8n_service
+):
+    response = await _trigger(client, "not-an-object-id")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Destination not found"}
+    mock_n8n_service.trigger_notification.assert_not_awaited()
+    mock_slack_n8n_service.trigger_notification.assert_not_awaited()
 
 
 async def test_notification_destination_inactive(
@@ -192,6 +294,86 @@ async def test_notification_webhook_missing(
     assert response.status_code == 400
     assert response.json() == {"detail": "Teams webhook is not configured"}
     mock_n8n_service.trigger_notification.assert_not_awaited()
+
+
+async def test_slack_notification_inactive_or_webhook_missing(
+    client, mongo_db, mock_slack_n8n_service
+):
+    client_id = await _create_client(client)
+    destination_id = await _create_slack_destination(client, client_id)
+    destination_query = {"_id": ObjectId(destination_id)}
+
+    await mongo_db["slack_destinations"].update_one(
+        destination_query, {"$set": {"is_active": False}}
+    )
+    inactive = await _trigger(client, destination_id)
+    assert inactive.status_code == 400
+    assert inactive.json() == {"detail": "Slack destination is inactive"}
+
+    await mongo_db["slack_destinations"].update_one(
+        destination_query,
+        {"$set": {"is_active": True}, "$unset": {"webhook_url": ""}},
+    )
+    missing = await _trigger(client, destination_id)
+    assert missing.status_code == 400
+    assert missing.json() == {"detail": "Slack webhook is not configured"}
+    mock_slack_n8n_service.trigger_notification.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UpstreamTimeoutError("private Slack n8n timeout"),
+        UpstreamError("private Slack n8n non-2xx"),
+    ],
+)
+async def test_slack_notification_n8n_failure_is_sanitized_and_recorded(
+    client, mongo_db, mock_slack_n8n_service, caplog, error
+):
+    client_id = await _create_client(client)
+    destination_id = await _create_slack_destination(client, client_id)
+    mock_slack_n8n_service.trigger_notification = AsyncMock(side_effect=error)
+
+    response = await _trigger(client, destination_id)
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Unable to send notification"}
+    assert "slack-secret" not in response.text
+    assert "slack-secret" not in caplog.text
+    assert "private Slack" not in response.text
+    history = await mongo_db["notifications"].find_one(
+        {"destination_id": ObjectId(destination_id)}
+    )
+    assert history["platform"] == "slack"
+    assert history["status"] == "failed"
+    assert history["failure_reason"] in {"n8n_timeout", "n8n_delivery_failed"}
+
+
+async def test_slack_notification_missing_n8n_config_is_sanitized(
+    client, mongo_db
+):
+    from app.config import Settings
+    from app.dependencies import get_slack_n8n_service
+    from app.main import app
+    from app.services.n8n_service import N8nService
+
+    settings = Settings(_env_file=None, SLACK_N8N_WEBHOOK_URL=None)
+    app.dependency_overrides[get_slack_n8n_service] = lambda: N8nService(
+        settings, webhook_url=None
+    )
+    client_id = await _create_client(client)
+    destination_id = await _create_slack_destination(client, client_id)
+
+    response = await _trigger(client, destination_id)
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Unable to send notification"}
+    assert "slack-secret" not in response.text
+    history = await mongo_db["notifications"].find_one(
+        {"destination_id": ObjectId(destination_id)}
+    )
+    assert history["status"] == "failed"
+    assert history["failure_reason"] == "n8n_delivery_failed"
 
 
 @pytest.mark.parametrize(
@@ -403,3 +585,25 @@ async def test_n8n_service_fails_safely_when_config_is_missing():
 
     assert caught.value.error_code == "n8n_config_missing"
     assert "http" not in str(caught.value)
+
+
+async def test_n8n_service_uses_independent_slack_configuration():
+    from app.config import Settings
+    from app.services.n8n_service import N8nService
+
+    settings = Settings(
+        _env_file=None,
+        N8N_NOTIFICATION_WEBHOOK_URL="https://n8n.example/teams-private",
+        SLACK_N8N_WEBHOOK_URL="https://n8n.example/slack-private",
+    )
+    teams_service = N8nService(settings)
+    slack_service = N8nService(
+        settings, webhook_url=settings.slack_n8n_webhook_url
+    )
+    missing_slack_service = N8nService(settings, webhook_url=None)
+
+    assert teams_service.webhook_url.endswith("/teams-private")
+    assert slack_service.webhook_url.endswith("/slack-private")
+    assert missing_slack_service.webhook_url is None
+    with pytest.raises(UpstreamConfigurationError):
+        await missing_slack_service.trigger_notification({"risk": {}})

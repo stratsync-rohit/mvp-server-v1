@@ -1,14 +1,11 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
-
 import pytest
-import httpx
 from bson import ObjectId
 
-from app.dependencies import get_slack_webhook_service
-from app.exceptions import SlackWebhookError, SlackWebhookTimeoutError
+from app.dependencies import get_slack_n8n_service
+from app.exceptions import UpstreamError, UpstreamTimeoutError
 from app.main import app
-from app.services.slack_webhook_service import SlackWebhookService
+from app.services.slack_destination_service import SLACK_TEST_MESSAGE
 from app.utils.slack_url_parser import (
     is_valid_slack_webhook_url,
     parse_slack_channel_link,
@@ -18,26 +15,6 @@ pytestmark = pytest.mark.asyncio
 
 CHANNEL_LINK = "https://stratsyncworkspace.slack.com/archives/C0BMC4NDPKJ"
 WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/secret-token"
-
-
-class _FakeHttpClient:
-    def __init__(self, result):
-        self.result = result
-        self.sent_url = None
-        self.sent_json = None
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_args):
-        return None
-
-    async def post(self, url, json):
-        self.sent_url = url
-        self.sent_json = json
-        if isinstance(self.result, Exception):
-            raise self.result
-        return self.result
 
 
 async def _create_client(client, suffix="001") -> str:
@@ -87,64 +64,6 @@ def test_slack_webhook_url_validator():
         "https://evil.example/services/T000/B000/secret"
     )
     assert not is_valid_slack_webhook_url("https://hooks.slack.com/not-services")
-
-
-async def test_slack_webhook_sender_posts_expected_message(monkeypatch):
-    response = httpx.Response(
-        200, text="ok", request=httpx.Request("POST", WEBHOOK_URL)
-    )
-    fake_client = _FakeHttpClient(response)
-    monkeypatch.setattr(
-        "app.services.slack_webhook_service.httpx.AsyncClient",
-        lambda timeout: fake_client,
-    )
-
-    await SlackWebhookService(timeout=5).send_test_message(WEBHOOK_URL)
-
-    assert fake_client.sent_url == WEBHOOK_URL
-    assert fake_client.sent_json == {
-        "text": "StratSync Slack integration test successful."
-    }
-
-
-@pytest.mark.parametrize(
-    ("result", "expected_exception"),
-    [
-        (
-            httpx.ReadTimeout(
-                "private timeout", request=httpx.Request("POST", WEBHOOK_URL)
-            ),
-            SlackWebhookTimeoutError,
-        ),
-        (
-            httpx.Response(
-                500,
-                text="private upstream failure",
-                request=httpx.Request("POST", WEBHOOK_URL),
-            ),
-            SlackWebhookError,
-        ),
-        (
-            httpx.Response(
-                200,
-                text="unexpected private body",
-                request=httpx.Request("POST", WEBHOOK_URL),
-            ),
-            SlackWebhookError,
-        ),
-    ],
-)
-async def test_slack_webhook_sender_sanitizes_failures(
-    monkeypatch, result, expected_exception
-):
-    monkeypatch.setattr(
-        "app.services.slack_webhook_service.httpx.AsyncClient",
-        lambda timeout: _FakeHttpClient(result),
-    )
-    with pytest.raises(expected_exception) as raised:
-        await SlackWebhookService(timeout=5).send_test_message(WEBHOOK_URL)
-    assert "private" not in str(raised.value)
-    assert "secret-token" not in str(raised.value)
 
 
 async def test_create_get_and_list_slack_destination(client, mongo_db):
@@ -357,15 +276,12 @@ async def test_invalid_and_missing_destination_responses(client):
     assert missing.status_code == 404
 
 
-async def test_slack_destination_test_success(client):
+async def test_slack_destination_test_uses_n8n_with_expected_payload(
+    client, mock_slack_n8n_service, caplog
+):
     client_id = await _create_client(client)
     created = await _create_destination(client, client_id)
     destination_id = created.json()["data"]["id"]
-    mock_webhook_service = AsyncMock()
-    mock_webhook_service.send_test_message = AsyncMock(return_value=None)
-    app.dependency_overrides[get_slack_webhook_service] = (
-        lambda: mock_webhook_service
-    )
 
     response = await client.post(f"/api/slack/channels/{destination_id}/test")
     assert response.status_code == 200
@@ -374,19 +290,27 @@ async def test_slack_destination_test_success(client):
         "status": "sent",
         "message": "Slack test notification sent successfully.",
     }
-    mock_webhook_service.send_test_message.assert_awaited_once_with(WEBHOOK_URL)
-    assert "secret-token" not in response.text
-
-
-async def test_slack_destination_test_validation_and_upstream_failure(
-    client, mongo_db
-):
-    mock_webhook_service = AsyncMock()
-    mock_webhook_service.send_test_message = AsyncMock()
-    app.dependency_overrides[get_slack_webhook_service] = (
-        lambda: mock_webhook_service
+    mock_slack_n8n_service.trigger_notification.assert_awaited_once_with(
+        {
+            "platform": "slack",
+            "mode": "test",
+            "destination_id": destination_id,
+            "client_id": client_id,
+            "workspace_domain": "stratsyncworkspace",
+            "channel_id": "C0BMC4NDPKJ",
+            "channel_name": "risk-alerts",
+            "slack_webhook_url": WEBHOOK_URL,
+            "message": SLACK_TEST_MESSAGE,
+        }
     )
+    assert "slack_webhook_url" not in response.text
+    assert "secret-token" not in response.text
+    assert "secret-token" not in caplog.text
 
+
+async def test_slack_destination_test_rejects_invalid_inactive_and_missing_webhook(
+    client, mongo_db, mock_slack_n8n_service
+):
     invalid = await client.post("/api/slack/channels/invalid-id/test")
     assert invalid.status_code == 404
 
@@ -401,15 +325,67 @@ async def test_slack_destination_test_validation_and_upstream_failure(
     assert inactive.json() == {"detail": "Slack destination is inactive"}
 
     await mongo_db["slack_destinations"].update_one(
-        {"_id": ObjectId(destination_id)}, {"$set": {"is_active": True}}
+        {"_id": ObjectId(destination_id)},
+        {"$set": {"is_active": True}, "$unset": {"webhook_url": ""}},
     )
-    mock_webhook_service.send_test_message.side_effect = SlackWebhookError(
-        "private secret failure"
+    missing_webhook = await client.post(
+        f"/api/slack/channels/{destination_id}/test"
     )
-    failed = await client.post(f"/api/slack/channels/{destination_id}/test")
-    assert failed.status_code == 502
-    assert failed.json() == {"detail": "Unable to send Slack test notification"}
-    assert "private secret failure" not in failed.text
+    assert missing_webhook.status_code == 400
+    assert missing_webhook.json() == {
+        "detail": "Slack webhook is not configured"
+    }
+    mock_slack_n8n_service.trigger_notification.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UpstreamTimeoutError("private n8n timeout"),
+        UpstreamError("private n8n non-2xx"),
+    ],
+)
+async def test_slack_destination_test_n8n_failure_is_sanitized(
+    client, mock_slack_n8n_service, caplog, error
+):
+    client_id = await _create_client(client)
+    created = await _create_destination(client, client_id)
+    destination_id = created.json()["data"]["id"]
+    mock_slack_n8n_service.trigger_notification.side_effect = error
+
+    response = await client.post(f"/api/slack/channels/{destination_id}/test")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "Unable to send Slack test notification"
+    }
+    assert "private n8n" not in response.text
+    assert "secret-token" not in response.text
+    assert "secret-token" not in caplog.text
+
+
+async def test_slack_destination_test_missing_n8n_config_is_sanitized(
+    client, caplog
+):
+    from app.config import Settings
+    from app.services.n8n_service import N8nService
+
+    settings = Settings(_env_file=None, SLACK_N8N_WEBHOOK_URL=None)
+    app.dependency_overrides[get_slack_n8n_service] = lambda: N8nService(
+        settings, webhook_url=None
+    )
+    client_id = await _create_client(client)
+    created = await _create_destination(client, client_id)
+    destination_id = created.json()["data"]["id"]
+
+    response = await client.post(f"/api/slack/channels/{destination_id}/test")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "Unable to send Slack test notification"
+    }
+    assert "secret-token" not in response.text
+    assert "secret-token" not in caplog.text
 
 
 async def test_slack_indexes_exist(mongo_db):

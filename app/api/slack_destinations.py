@@ -3,8 +3,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.database import get_database
-from app.dependencies import get_slack_webhook_service
-from app.exceptions import SlackWebhookError
+from app.dependencies import get_slack_n8n_service
+from app.exceptions import UpstreamError, UpstreamTimeoutError
 from app.repositories.client_repository import ClientRepository
 from app.repositories.slack_destination_repository import SlackDestinationRepository
 from app.schemas.slack_destination import (
@@ -39,11 +39,11 @@ def _safe_destination_data(destination):
     }
 
 
-def _service(database, slack_webhook_service=None):
+def _service(database, slack_n8n_service=None):
     return SlackDestinationService(
         slack_destination_repository=SlackDestinationRepository(database),
         client_repository=ClientRepository(database),
-        slack_webhook_service=slack_webhook_service,
+        slack_n8n_service=slack_n8n_service,
     )
 
 
@@ -210,17 +210,17 @@ async def delete_slack_destination(
 async def test_slack_destination(
     destination_id: str,
     database=Depends(get_database),
-    slack_webhook_service=Depends(get_slack_webhook_service),
+    slack_n8n_service=Depends(get_slack_n8n_service),
 ):
     try:
-        await _service(database, slack_webhook_service).test_destination(
+        await _service(database, slack_n8n_service).test_destination(
             destination_id
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-    except SlackWebhookError:
+    except (UpstreamTimeoutError, UpstreamError):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to send Slack test notification",

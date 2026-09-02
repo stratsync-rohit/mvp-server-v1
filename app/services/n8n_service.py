@@ -11,11 +11,17 @@ from app.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_WEBHOOK = object()
+
 
 class N8nService:
 
-    def __init__(self, settings):
-        configured_url = settings.n8n_notification_webhook_url
+    def __init__(self, settings, webhook_url=_DEFAULT_WEBHOOK):
+        configured_url = (
+            settings.n8n_notification_webhook_url
+            if webhook_url is _DEFAULT_WEBHOOK
+            else webhook_url
+        )
         self.webhook_url = configured_url.strip() if configured_url else None
         self.timeout = settings.n8n_request_timeout_seconds
 

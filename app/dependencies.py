@@ -24,7 +24,7 @@ from app.services.industry_service import IndustryService
 from app.services.n8n_service import N8nService
 from app.services.notification_service import NotificationService
 from app.services.risk_service import RiskService
-from app.services.slack_webhook_service import SlackWebhookService
+from app.services.slack_interaction_service import SlackInteractionService
 from app.services.teams_channel_service import TeamsChannelService
 
 
@@ -115,10 +115,24 @@ def get_n8n_service(settings: Settings = Depends(get_settings)) -> N8nService:
     return N8nService(settings)
 
 
-def get_slack_webhook_service(
+def get_slack_n8n_service(
     settings: Settings = Depends(get_settings),
-) -> SlackWebhookService:
-    return SlackWebhookService(settings.slack_request_timeout_seconds)
+) -> N8nService:
+    return N8nService(settings, webhook_url=settings.slack_n8n_webhook_url)
+
+
+def get_slack_interaction_service(
+    settings: Settings = Depends(get_settings),
+) -> SlackInteractionService:
+    return SlackInteractionService(settings)
+
+
+def get_slack_interaction_n8n_service(
+    settings: Settings = Depends(get_settings),
+) -> N8nService:
+    return N8nService(
+        settings, webhook_url=settings.slack_interaction_n8n_url
+    )
 
 
 def get_notification_service(
@@ -129,13 +143,19 @@ def get_notification_service(
     teams_channel_repository: TeamsChannelRepository = Depends(
         get_teams_channel_repository
     ),
+    slack_destination_repository: SlackDestinationRepository = Depends(
+        get_slack_destination_repository
+    ),
     client_repository: ClientRepository = Depends(get_client_repository),
     n8n_service: N8nService = Depends(get_n8n_service),
+    slack_n8n_service: N8nService = Depends(get_slack_n8n_service),
 ) -> NotificationService:
     return NotificationService(
         notification_repository=notification_repository,
         risk_repository=risk_repository,
         teams_channel_repository=teams_channel_repository,
+        slack_destination_repository=slack_destination_repository,
         client_repository=client_repository,
-        n8n_service=n8n_service
+        n8n_service=n8n_service,
+        slack_n8n_service=slack_n8n_service,
     )
