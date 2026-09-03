@@ -202,6 +202,89 @@ async def test_slack_notification_resolves_and_sends_full_safe_payload(
     assert "slack_webhook_url" not in history
 
 
+@pytest.mark.parametrize("platform", ["teams", "slack"])
+async def test_notification_normalizes_shared_string_mitigation_steps(
+    client,
+    mongo_db,
+    mock_n8n_service,
+    mock_slack_n8n_service,
+    platform,
+):
+    client_id = await _create_client(client, code=f"MIT-{platform}")
+    if platform == "teams":
+        destination_id = await _create_channel(client, client_id)
+        delivery_service = mock_n8n_service
+    else:
+        destination_id = await _create_slack_destination(client, client_id)
+        delivery_service = mock_slack_n8n_service
+
+    await mongo_db["risks"].update_one(
+        {"risk_id": "RSK-21132-0472"},
+        {
+            "$set": {
+                "mitigation": {
+                    "summary": "Reduce the risk.",
+                    "steps": ["First action", "Second action"],
+                    "next_action": "First action",
+                }
+            }
+        },
+    )
+
+    response = await _trigger(client, destination_id)
+
+    assert response.status_code == 200
+    payload = delivery_service.trigger_notification.call_args.args[0]
+    assert payload["risk"]["mitigation"] == {
+        "summary": "Reduce the risk.",
+        "steps": [
+            {"step": "First action", "owner": "-"},
+            {"step": "Second action", "owner": "-"},
+        ],
+        "next_action": "First action",
+    }
+
+
+@pytest.mark.parametrize(
+    ("source_steps", "expected_steps"),
+    [
+        (
+            [
+                {"step": "Owned action", "owner": "Risk Owner"},
+                {"step": "Missing owner"},
+                {"step": "   "},
+                "",
+            ],
+            [
+                {"step": "Owned action", "owner": "Risk Owner"},
+                {"step": "Missing owner", "owner": "-"},
+            ],
+        ),
+        (["Only one action"], [{"step": "Only one action", "owner": "-"}]),
+        ([], []),
+    ],
+)
+async def test_notification_filters_invalid_actions_and_preserves_real_count(
+    client,
+    mongo_db,
+    mock_n8n_service,
+    source_steps,
+    expected_steps,
+):
+    client_id = await _create_client(client, code="MIT-EDGE")
+    destination_id = await _create_channel(client, client_id)
+    await mongo_db["risks"].update_one(
+        {"risk_id": "RSK-21132-0472"},
+        {"$set": {"mitigation": {"steps": source_steps}}},
+    )
+
+    response = await _trigger(client, destination_id)
+
+    assert response.status_code == 200
+    payload = mock_n8n_service.trigger_notification.call_args.args[0]
+    assert payload["risk"]["mitigation"]["steps"] == expected_steps
+
+
 async def test_notification_request_accepts_only_ids(client):
     response = await client.post(
         "/api/notifications/trigger",

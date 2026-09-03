@@ -9,6 +9,7 @@ from app.exceptions import (
     UpstreamTimeoutError
 )
 from app.utils.mongo_serializer import serialize_mongo_document
+from app.utils.mitigation_plan import normalize_mitigation_plan_for_notification
 
 
 class NotificationService:
@@ -113,6 +114,7 @@ class NotificationService:
 
         risk_payload = serialize_mongo_document(risk)
         risk_payload.pop("id", None)
+        risk_payload = normalize_mitigation_plan_for_notification(risk_payload)
         if platform == "teams":
             payload = {
                 "teams_webhook_url": destination_webhook_url,
