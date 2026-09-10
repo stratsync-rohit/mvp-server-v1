@@ -344,3 +344,120 @@ async def test_create_risk_requires_non_blank_risk_id(
     response = await client.post("/api/risks", json=canonical_risk_payload)
 
     assert response.status_code == 422
+
+
+async def test_update_canonical_risk_preserves_identity_and_cleans_steps(
+    client, mongo_db, canonical_risk_payload
+):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    before = await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    )
+
+    canonical_risk_payload["title"] = "Updated risk title"
+    canonical_risk_payload["sender"]["risk_id"] = "WRONG-SENDER-ID"
+    canonical_risk_payload["mitigation"]["steps"] = [
+        {
+            "step": 9,
+            "title": "New mitigation step",
+            "description": "",
+            "owner": "",
+        },
+        {
+            "step": 12,
+            "title": "Review supplier options",
+            "description": "Compare available suppliers.",
+            "owner": "Procurement",
+        },
+    ]
+    canonical_risk_payload["_id"] = "client-controlled-id"
+    canonical_risk_payload["created_at"] = "2000-01-01T00:00:00Z"
+
+    response = await client.put(
+        f"/api/risks/{canonical_risk_payload['risk_id']}",
+        json=canonical_risk_payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Risk updated successfully",
+        "risk_id": canonical_risk_payload["risk_id"],
+    }
+    stored = await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    )
+    assert stored["_id"] == before["_id"]
+    assert stored["created_at"] == before["created_at"]
+    assert stored["updated_at"] >= before["updated_at"]
+    assert stored["title"] == "Updated risk title"
+    assert stored["sender"]["risk_id"] == stored["risk_id"]
+    assert stored["mitigation"]["steps"] == [
+        {
+            "step": 1,
+            "title": "Review supplier options",
+            "description": "Compare available suppliers.",
+            "owner": "Procurement",
+        }
+    ]
+
+
+async def test_update_rejects_risk_id_change(client, canonical_risk_payload):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    original_id = canonical_risk_payload["risk_id"]
+    canonical_risk_payload["risk_id"] = "RSK-DIFFERENT-ID"
+
+    response = await client.put(
+        f"/api/risks/{original_id}", json=canonical_risk_payload
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Risk ID cannot be changed"}
+
+
+async def test_update_unknown_risk_returns_404(client, canonical_risk_payload):
+    canonical_risk_payload["risk_id"] = "RSK-UNKNOWN-EDIT"
+
+    response = await client.put(
+        "/api/risks/RSK-UNKNOWN-EDIT", json=canonical_risk_payload
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Risk not found"}
+
+
+async def test_delete_risk_only_deletes_requested_document(
+    client, mongo_db, canonical_risk_payload
+):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    await mongo_db["notifications"].insert_one(
+        {"risk_id": canonical_risk_payload["risk_id"], "status": "sent"}
+    )
+
+    response = await client.delete(
+        f"/api/risks/{canonical_risk_payload['risk_id']}"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Risk deleted successfully",
+        "risk_id": canonical_risk_payload["risk_id"],
+    }
+    assert await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    ) is None
+    assert await mongo_db["risks"].find_one(
+        {"risk_id": "RSK-21132-0472"}
+    ) is not None
+    assert await mongo_db["notifications"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    ) is not None
+
+
+async def test_delete_unknown_risk_returns_404(client):
+    response = await client.delete("/api/risks/RSK-UNKNOWN-DELETE")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Risk not found"}

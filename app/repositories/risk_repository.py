@@ -1,3 +1,6 @@
+from pymongo import ReturnDocument
+
+
 class RiskRepository:
 
     def __init__(self, database):
@@ -43,6 +46,17 @@ class RiskRepository:
         result = await self.collection.insert_one(document)
         document["_id"] = result.inserted_id
         return document
+
+    async def update_risk_by_risk_id(self, risk_id: str, document: dict):
+        return await self.collection.find_one_and_update(
+            {"risk_id": risk_id},
+            {"$set": document},
+            return_document=ReturnDocument.AFTER,
+        )
+
+    async def delete_risk_by_risk_id(self, risk_id: str) -> bool:
+        result = await self.collection.delete_one({"risk_id": risk_id})
+        return result.deleted_count == 1
 
     async def get_risks_by_industry(
         self,

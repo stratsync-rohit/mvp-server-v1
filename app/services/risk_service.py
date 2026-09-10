@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from pymongo.errors import DuplicateKeyError
 
-from app.exceptions import ConflictError
+from app.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.schemas.risk import RiskCreate
 from app.utils.mongo_serializer import serialize_mongo_document
 
@@ -54,21 +54,7 @@ class RiskService:
         document.pop("created_at", None)
         document.pop("updated_at", None)
 
-        document["sender"]["risk_id"] = document["risk_id"]
-
-        real_steps = []
-        for step in document["mitigation"]["steps"]:
-            is_placeholder = (
-                step["title"] == "New mitigation step"
-                and step["description"] == ""
-                and step["owner"] == ""
-            )
-            if not is_placeholder:
-                real_steps.append(step)
-
-        for number, step in enumerate(real_steps, start=1):
-            step["step"] = number
-        document["mitigation"]["steps"] = real_steps
+        self._normalize_canonical_document(document, document["risk_id"])
 
         existing = await self.risk_repository.get_risk_by_risk_id(
             document["risk_id"]
@@ -84,3 +70,48 @@ class RiskService:
             return await self.risk_repository.create_risk(document)
         except DuplicateKeyError as exc:
             raise ConflictError("Risk ID already exists") from exc
+
+    async def update_risk(self, risk_id: str, payload: RiskCreate):
+        if payload.risk_id != risk_id:
+            raise ValidationAppError("Risk ID cannot be changed")
+
+        existing = await self.risk_repository.get_risk_by_risk_id(risk_id)
+        if existing is None:
+            raise NotFoundError("Risk not found")
+
+        document = payload.model_dump(mode="python", exclude_unset=True)
+        document.pop("_id", None)
+        document.pop("created_at", None)
+        document.pop("updated_at", None)
+        self._normalize_canonical_document(document, risk_id)
+        document["updated_at"] = datetime.now(timezone.utc)
+
+        updated = await self.risk_repository.update_risk_by_risk_id(
+            risk_id, document
+        )
+        if updated is None:
+            # The record may have been deleted between the read and update.
+            raise NotFoundError("Risk not found")
+        return updated
+
+    async def delete_risk(self, risk_id: str) -> None:
+        deleted = await self.risk_repository.delete_risk_by_risk_id(risk_id)
+        if not deleted:
+            raise NotFoundError("Risk not found")
+
+    @staticmethod
+    def _normalize_canonical_document(document: dict, risk_id: str) -> None:
+        document["sender"]["risk_id"] = risk_id
+        real_steps = []
+        for step in document["mitigation"]["steps"]:
+            is_placeholder = (
+                step["title"] == "New mitigation step"
+                and step["description"] == ""
+                and step["owner"] == ""
+            )
+            if not is_placeholder:
+                real_steps.append(step)
+
+        for number, step in enumerate(real_steps, start=1):
+            step["step"] = number
+        document["mitigation"]["steps"] = real_steps

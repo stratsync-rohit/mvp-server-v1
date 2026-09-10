@@ -95,6 +95,16 @@ class RiskCreateResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class RiskUpdateResponse(BaseModel):
+    message: str
+    risk_id: str
+
+
+class RiskDeleteResponse(BaseModel):
+    message: str
+    risk_id: str
+
+
 class RiskDocument(BaseModel):
     model_config = ConfigDict(extra="allow")
 

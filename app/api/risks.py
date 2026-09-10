@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.dependencies import get_risk_service
-from app.exceptions import ConflictError
+from app.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.schemas.risk import (
     RiskCreate,
     RiskCreateResponse,
+    RiskDeleteResponse,
     RiskDetailResponse,
     RiskListResponse,
+    RiskUpdateResponse,
 )
 from app.services.risk_service import RiskService
 
@@ -45,6 +47,59 @@ async def create_risk(
         "risk_id": risk["risk_id"],
         "_id": str(risk["_id"]),
     }
+
+
+@router.put(
+    "/{risk_id}",
+    response_model=RiskUpdateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_risk(
+    risk_id: str,
+    payload: RiskCreate,
+    service: RiskService = Depends(get_risk_service),
+):
+    try:
+        await service.update_risk(risk_id, payload)
+    except ValidationAppError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to update risk",
+        ) from exc
+
+    return {"message": "Risk updated successfully", "risk_id": risk_id}
+
+
+@router.delete(
+    "/{risk_id}",
+    response_model=RiskDeleteResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def delete_risk(
+    risk_id: str,
+    service: RiskService = Depends(get_risk_service),
+):
+    try:
+        await service.delete_risk(risk_id)
+    except NotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to delete risk",
+        ) from exc
+
+    return {"message": "Risk deleted successfully", "risk_id": risk_id}
 
 
 @router.get(
