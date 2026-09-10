@@ -1,3 +1,9 @@
+from datetime import datetime, timezone
+
+from pymongo.errors import DuplicateKeyError
+
+from app.exceptions import ConflictError
+from app.schemas.risk import RiskCreate
 from app.utils.mongo_serializer import serialize_mongo_document
 
 
@@ -37,3 +43,44 @@ class RiskService:
             is_active=True
         )
         return [serialize_mongo_document(risk) for risk in risks]
+
+    async def create_risk(self, payload: RiskCreate):
+        # Preserve the builder payload shape instead of materializing omitted
+        # optional fields as null/default values.
+        document = payload.model_dump(mode="python", exclude_unset=True)
+
+        # These fields are always owned by the server, even if supplied as extras.
+        document.pop("_id", None)
+        document.pop("created_at", None)
+        document.pop("updated_at", None)
+
+        document["sender"]["risk_id"] = document["risk_id"]
+
+        real_steps = []
+        for step in document["mitigation"]["steps"]:
+            is_placeholder = (
+                step["title"] == "New mitigation step"
+                and step["description"] == ""
+                and step["owner"] == ""
+            )
+            if not is_placeholder:
+                real_steps.append(step)
+
+        for number, step in enumerate(real_steps, start=1):
+            step["step"] = number
+        document["mitigation"]["steps"] = real_steps
+
+        existing = await self.risk_repository.get_risk_by_risk_id(
+            document["risk_id"]
+        )
+        if existing is not None:
+            raise ConflictError("Risk ID already exists")
+
+        now = datetime.now(timezone.utc)
+        document["created_at"] = now
+        document["updated_at"] = now
+
+        try:
+            return await self.risk_repository.create_risk(document)
+        except DuplicateKeyError as exc:
+            raise ConflictError("Risk ID already exists") from exc

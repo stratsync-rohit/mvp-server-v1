@@ -8,6 +8,86 @@ from bson import ObjectId
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture
+def canonical_risk_payload():
+    return {
+        "risk_id": "RSK-V22U-OZVV",
+        "card_id": "revenue-to-cover",
+        "industry_slug": "distribution-trading",
+        "industry_name": "Distribution & Trading",
+        "title": "Potential To-Cover Risk Discovered",
+        "severity": "high",
+        "severity_label": "High",
+        "subtitle": "SKU 21132 · Burberry XYZ Perfume for Men",
+        "summary": "Pending sales orders have increased...",
+        "sender": {
+            "name": "StratSync Risk Monitor",
+            "source": "Potential To-Cover Alert",
+            "risk_id": "MISMATCHED-ID",
+            "timestamp": "09:42 AM IST",
+        },
+        "entity": {
+            "type": "sku",
+            "id": "21132",
+            "name": "Burberry XYZ Perfume for Men",
+        },
+        "metrics": [
+            {
+                "key": "revenue_at_risk",
+                "label": "Revenue at Risk",
+                "value": "$130,000",
+                "raw_value": 130000,
+                "type": "currency",
+                "highlight": True,
+            }
+        ],
+        "details": {
+            "section_title": "ITEM-LEVEL DETAILS",
+            "items": [
+                {
+                    "label": "Demand signal",
+                    "value": "Pending sales orders exceed available inventory.",
+                }
+            ],
+            "underlying_exposure": [
+                "Pending sales orders exceed available inventory."
+            ],
+            "impact": [
+                "Open customer orders may miss requested delivery dates."
+            ],
+        },
+        "mitigation": {
+            "summary": "Close the cover gap.",
+            "steps": [
+                {
+                    "step": 4,
+                    "title": "Confirm cover gap",
+                    "description": "Validate current stock and demand.",
+                    "owner": "Procurement",
+                },
+                {
+                    "step": 5,
+                    "title": "New mitigation step",
+                    "description": "",
+                    "owner": "",
+                },
+                {
+                    "step": 8,
+                    "title": "Expedite replenishment",
+                    "description": "Request an expedited delivery.",
+                    "owner": "Supply Chain",
+                },
+            ],
+            "last_updated": "2026-08-27T04:01:55.261Z",
+            "next_action": "Confirm the cover gap with Procurement.",
+        },
+        "actions": [],
+        "detected_time": "09:42 AM IST",
+        "is_active": True,
+        "status": "active",
+    }
+
+
 @pytest_asyncio.fixture
 async def risk_data(mongo_db):
     now = datetime.now(timezone.utc)
@@ -198,3 +278,69 @@ async def test_get_unknown_risk_returns_404(client, risk_data):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Risk not found"}
+
+
+async def test_create_canonical_risk(client, mongo_db, canonical_risk_payload):
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 201
+    assert response.json()["message"] == "Risk created successfully"
+    assert response.json()["risk_id"] == canonical_risk_payload["risk_id"]
+    assert isinstance(response.json()["_id"], str)
+
+    stored = await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    )
+    assert stored["_id"] is not None
+    assert isinstance(stored["created_at"], datetime)
+    assert isinstance(stored["updated_at"], datetime)
+    assert stored["created_at"] == stored["updated_at"]
+    assert stored["sender"]["risk_id"] == stored["risk_id"]
+    assert stored["entity"] == canonical_risk_payload["entity"]
+    assert stored["sender"]["source"] == "Potential To-Cover Alert"
+    assert stored["details"]["section_title"] == "ITEM-LEVEL DETAILS"
+
+    steps = stored["mitigation"]["steps"]
+    assert [step["title"] for step in steps] == [
+        "Confirm cover gap",
+        "Expedite replenishment",
+    ]
+    assert [step["step"] for step in steps] == [1, 2]
+
+
+async def test_create_risk_without_sender_id_normalizes_it(
+    client, mongo_db, canonical_risk_payload
+):
+    canonical_risk_payload["risk_id"] = "RSK-NO-SENDER-ID"
+    canonical_risk_payload["sender"].pop("risk_id")
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 201
+    stored = await mongo_db["risks"].find_one({"risk_id": "RSK-NO-SENDER-ID"})
+    assert stored["sender"]["risk_id"] == "RSK-NO-SENDER-ID"
+
+
+async def test_create_duplicate_risk_returns_409(
+    client, canonical_risk_payload
+):
+    first = await client.post("/api/risks", json=canonical_risk_payload)
+    duplicate = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert first.status_code == 201
+    assert duplicate.status_code == 409
+    assert duplicate.json() == {"detail": "Risk ID already exists"}
+
+
+@pytest.mark.parametrize("risk_id", [None, "", "   "])
+async def test_create_risk_requires_non_blank_risk_id(
+    client, canonical_risk_payload, risk_id
+):
+    if risk_id is None:
+        canonical_risk_payload.pop("risk_id")
+    else:
+        canonical_risk_payload["risk_id"] = risk_id
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 422

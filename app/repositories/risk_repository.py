@@ -36,6 +36,14 @@ class RiskRepository:
             "risk_id": risk_id
         })
 
+    async def get_risk_by_risk_id(self, risk_id: str):
+        return await self.get_risk_by_id(risk_id)
+
+    async def create_risk(self, document: dict):
+        result = await self.collection.insert_one(document)
+        document["_id"] = result.inserted_id
+        return document
+
     async def get_risks_by_industry(
         self,
         industry_slug: str,

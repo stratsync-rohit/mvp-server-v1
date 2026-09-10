@@ -1,7 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.dependencies import get_risk_service
-from app.schemas.risk import RiskDetailResponse, RiskListResponse
+from app.exceptions import ConflictError
+from app.schemas.risk import (
+    RiskCreate,
+    RiskCreateResponse,
+    RiskDetailResponse,
+    RiskListResponse,
+)
 from app.services.risk_service import RiskService
 
 
@@ -9,6 +15,36 @@ router = APIRouter(
     prefix="/api/risks",
     tags=["Risks"]
 )
+
+
+@router.post(
+    "",
+    response_model=RiskCreateResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_risk(
+    payload: RiskCreate,
+    service: RiskService = Depends(get_risk_service),
+):
+    try:
+        risk = await service.create_risk(payload)
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to create risk",
+        ) from exc
+
+    return {
+        "message": "Risk created successfully",
+        "risk_id": risk["risk_id"],
+        "_id": str(risk["_id"]),
+    }
 
 
 @router.get(
