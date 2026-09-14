@@ -24,20 +24,23 @@ def normalize_mitigation_plan_for_notification(risk: dict) -> dict:
         if not isinstance(item, dict):
             continue
 
-        step_text = item.get("step")
-        if not isinstance(step_text, str) or not step_text.strip():
+        step_text = None
+        for field in ("description", "title", "action", "text", "step"):
+            candidate = item.get(field)
+            if isinstance(candidate, str) and candidate.strip():
+                step_text = candidate.strip()
+                break
+
+        if step_text is None:
             continue
 
-        normalized_item = deepcopy(item)
-        normalized_item["step"] = step_text.strip()
-
         owner = item.get("owner")
-        normalized_item["owner"] = (
+        normalized_owner = (
             owner.strip()
             if isinstance(owner, str) and owner.strip()
             else "-"
         )
-        normalized_steps.append(normalized_item)
+        normalized_steps.append({"step": step_text, "owner": normalized_owner})
 
     mitigation["steps"] = normalized_steps
     return normalized_risk

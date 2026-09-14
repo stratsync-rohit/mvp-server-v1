@@ -245,6 +245,67 @@ async def test_notification_normalizes_shared_string_mitigation_steps(
     }
 
 
+@pytest.mark.parametrize("platform", ["teams", "slack"])
+async def test_notification_normalizes_canonical_mitigation_steps(
+    client,
+    mongo_db,
+    mock_n8n_service,
+    mock_slack_n8n_service,
+    platform,
+):
+    client_id = await _create_client(client, code=f"CANON-{platform}")
+    if platform == "teams":
+        destination_id = await _create_channel(client, client_id)
+        delivery_service = mock_n8n_service
+    else:
+        destination_id = await _create_slack_destination(client, client_id)
+        delivery_service = mock_slack_n8n_service
+
+    await mongo_db["risks"].update_one(
+        {"risk_id": "RSK-21132-0472"},
+        {
+            "$set": {
+                "mitigation": {
+                    "summary": "",
+                    "steps": [
+                        {
+                            "step": 1,
+                            "title": "monday-test-1",
+                            "description": "monday-test-1",
+                            "owner": "Rohit",
+                        },
+                        {
+                            "step": 2,
+                            "title": "monday-test-1",
+                            "description": "test-Rohit Choukiker",
+                            "owner": "Mitigation Plan",
+                        },
+                    ],
+                    "last_updated": "",
+                    "next_action": "",
+                }
+            }
+        },
+    )
+
+    response = await _trigger(client, destination_id)
+
+    assert response.status_code == 200
+    payload = delivery_service.trigger_notification.call_args.args[0]
+    assert payload["risk"]["mitigation"] == {
+        "summary": "",
+        "steps": [
+            {"step": "monday-test-1", "owner": "Rohit"},
+            {
+                "step": "test-Rohit Choukiker",
+                "owner": "Mitigation Plan",
+            },
+        ],
+        "last_updated": "",
+        "next_action": "",
+    }
+
+
 @pytest.mark.parametrize(
     ("source_steps", "expected_steps"),
     [
