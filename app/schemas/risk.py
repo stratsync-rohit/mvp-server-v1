@@ -47,7 +47,7 @@ class RiskDetails(CanonicalRiskModel):
 class RiskMitigationStep(CanonicalRiskModel):
     step: int
     title: str
-    description: str
+    description: str | None = None
     owner: str
 
 

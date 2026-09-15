@@ -106,7 +106,7 @@ class RiskService:
         for step in document["mitigation"]["steps"]:
             is_placeholder = (
                 step["title"] == "New mitigation step"
-                and step["description"] == ""
+                and step.get("description") in (None, "")
                 and step["owner"] == ""
             )
             if not is_placeholder:

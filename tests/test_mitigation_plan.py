@@ -40,7 +40,7 @@ def test_normalizes_existing_object_with_string_step():
     ]
 
 
-def test_normalizes_canonical_numeric_steps_using_description():
+def test_normalizes_legacy_numeric_steps_using_description():
     assert _normalize_steps([
         {
             "step": 1,
@@ -57,6 +57,18 @@ def test_normalizes_canonical_numeric_steps_using_description():
     ]) == [
         {"step": "monday-test-1", "owner": "Rohit"},
         {"step": "test-Rohit Choukiker", "owner": "Mitigation Plan"},
+    ]
+
+
+def test_normalizes_canonical_numeric_steps_using_title_without_description():
+    assert _normalize_steps([
+        {
+            "step": 1,
+            "title": "Confirm cover gap",
+            "owner": " Procurement ",
+        }
+    ]) == [
+        {"step": "Confirm cover gap", "owner": "Procurement"}
     ]
 
 

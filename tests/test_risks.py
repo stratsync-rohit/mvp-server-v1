@@ -306,6 +306,51 @@ async def test_create_canonical_risk(client, mongo_db, canonical_risk_payload):
         "Expedite replenishment",
     ]
     assert [step["step"] for step in steps] == [1, 2]
+    assert steps[0]["description"] == "Validate current stock and demand."
+
+
+async def test_create_accepts_canonical_step_without_inventing_description(
+    client, mongo_db, canonical_risk_payload
+):
+    canonical_risk_payload["risk_id"] = "RSK-CANONICAL-STEP"
+    canonical_risk_payload["sender"]["risk_id"] = "RSK-CANONICAL-STEP"
+    canonical_risk_payload["details"] = {
+        "section_title": "ITEM-LEVEL DETAILS",
+        "items": [
+            {
+                "label": "Demand signal",
+                "value": "Pending sales orders have increased.",
+            }
+        ],
+    }
+    canonical_risk_payload["mitigation"]["steps"] = [
+        {
+            "step": 1,
+            "title": "Confirm cover gap",
+            "owner": "Procurement",
+        }
+    ]
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 201
+    stored = await mongo_db["risks"].find_one({"risk_id": "RSK-CANONICAL-STEP"})
+    assert stored["mitigation"]["steps"] == [
+        {
+            "step": 1,
+            "title": "Confirm cover gap",
+            "owner": "Procurement",
+        }
+    ]
+    assert stored["details"] == {
+        "section_title": "ITEM-LEVEL DETAILS",
+        "items": [
+            {
+                "label": "Demand signal",
+                "value": "Pending sales orders have increased.",
+            }
+        ],
+    }
 
 
 async def test_create_risk_without_sender_id_normalizes_it(
@@ -397,6 +442,35 @@ async def test_update_canonical_risk_preserves_identity_and_cleans_steps(
             "step": 1,
             "title": "Review supplier options",
             "description": "Compare available suppliers.",
+            "owner": "Procurement",
+        }
+    ]
+
+
+async def test_update_accepts_canonical_step_without_inventing_description(
+    client, mongo_db, canonical_risk_payload
+):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    risk_id = canonical_risk_payload["risk_id"]
+    canonical_risk_payload["mitigation"]["steps"] = [
+        {
+            "step": 1,
+            "title": "Confirm cover gap",
+            "owner": "Procurement",
+        }
+    ]
+
+    response = await client.put(
+        f"/api/risks/{risk_id}", json=canonical_risk_payload
+    )
+
+    assert response.status_code == 200
+    stored = await mongo_db["risks"].find_one({"risk_id": risk_id})
+    assert stored["mitigation"]["steps"] == [
+        {
+            "step": 1,
+            "title": "Confirm cover gap",
             "owner": "Procurement",
         }
     ]
