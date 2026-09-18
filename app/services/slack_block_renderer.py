@@ -12,6 +12,8 @@ MAX_SECTION_TEXT = 3000
 MAX_FIELD_TEXT = 2000
 MAX_BLOCKS = 50
 MAX_ACTION_VALUE = 2000
+MAX_TABLE_ROWS = 100
+MAX_TABLE_COLUMNS = 20
 
 
 def _safe_text(value: Any, fallback: str = "") -> str:
@@ -49,84 +51,25 @@ def _mrkdwn(text: Any) -> dict[str, str]:
     }
 
 
-def _plain_text(text: Any) -> dict[str, str]:
+def _plain_text(text: Any) -> dict[str, Any]:
     return {
         "type": "plain_text",
         "text": _truncate(
             _safe_text(text),
             75,
         ),
-        "emoji": True,
+        "emoji": False,
     }
 
 
 def _escape_mrkdwn(value: Any) -> str:
     text = _safe_text(value)
 
-    # Slack mrkdwn special characters.
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
-
-
-def _severity_emoji(severity: Any) -> str:
-    value = _safe_text(severity).lower()
-
-    if "critical" in value:
-        return "🔴"
-
-    if "high" in value:
-        return "🔴"
-
-    if "medium" in value or "warning" in value:
-        return "🟠"
-
-    if "low" in value:
-        return "🟢"
-
-    return "⚪"
-
-
-def _status_emoji(status: Any) -> str:
-    value = _safe_text(status).lower()
-
-    if value in {
-        "critical",
-        "high",
-        "danger",
-        "error",
-        "failed",
-        "negative",
-    }:
-        return "🔴"
-
-    if value in {
-        "medium",
-        "warning",
-        "warn",
-        "pending",
-    }:
-        return "🟠"
-
-    if value in {
-        "low",
-        "good",
-        "success",
-        "healthy",
-        "positive",
-        "ok",
-    }:
-        return "🟢"
-
-    if value in {
-        "info",
-        "accent",
-    }:
-        return "🔵"
-
-    return ""
 
 
 def _heading(title: Any) -> dict[str, Any] | None:
@@ -143,6 +86,12 @@ def _heading(title: Any) -> dict[str, Any] | None:
     }
 
 
+def _divider() -> dict[str, str]:
+    return {
+        "type": "divider",
+    }
+
+
 # ============================================================
 # GENERIC BLOCK RENDERERS
 # ============================================================
@@ -153,9 +102,7 @@ def _render_text_block(
 
     result: list[dict[str, Any]] = []
 
-    title = _safe_text(
-        block.get("title")
-    )
+    title = _safe_text(block.get("title"))
 
     text = _safe_text(
         block.get("text")
@@ -170,26 +117,15 @@ def _render_text_block(
             result.append(heading)
 
     if text:
-        status = _status_emoji(
-            block.get("status")
-        )
-
         rendered_text = _escape_mrkdwn(text)
 
         if block.get("bold") is True:
             rendered_text = f"*{rendered_text}*"
 
-        if status:
-            rendered_text = (
-                f"{status} {rendered_text}"
-            )
-
         result.append(
             {
                 "type": "section",
-                "text": _mrkdwn(
-                    rendered_text
-                ),
+                "text": _mrkdwn(rendered_text),
             }
         )
 
@@ -200,29 +136,35 @@ def _render_callout_block(
     block: dict[str, Any],
 ) -> list[dict[str, Any]]:
 
+    result: list[dict[str, Any]] = []
+
+    title = _safe_text(block.get("title"))
+
     text = _safe_text(
         block.get("text")
         or block.get("value")
         or block.get("content")
     )
 
+    if title:
+        heading = _heading(title)
+
+        if heading:
+            result.append(heading)
+
     if not text:
-        return []
+        return result
 
-    status = _status_emoji(
-        block.get("status")
-    )
-
-    prefix = f"{status} " if status else "📌 "
-
-    return [
+    result.append(
         {
             "type": "section",
             "text": _mrkdwn(
-                f"{prefix}*{_escape_mrkdwn(text)}*"
+                f"*{_escape_mrkdwn(text)}*"
             ),
         }
-    ]
+    )
+
+    return result
 
 
 def _render_key_value_block(
@@ -231,9 +173,7 @@ def _render_key_value_block(
 
     result: list[dict[str, Any]] = []
 
-    title = _safe_text(
-        block.get("title")
-    )
+    title = _safe_text(block.get("title"))
 
     if title:
         heading = _heading(title)
@@ -243,9 +183,7 @@ def _render_key_value_block(
 
     fields: list[dict[str, str]] = []
 
-    for item in _safe_list(
-        block.get("items")
-    ):
+    for item in _safe_list(block.get("items")):
         if not isinstance(item, dict):
             continue
 
@@ -278,20 +216,16 @@ def _render_key_value_block(
             }
         )
 
-    # Slack sections allow at most 10 fields.
-    for index in range(
-        0,
-        len(fields),
-        10,
-    ):
-        result.append(
-            {
-                "type": "section",
-                "fields": fields[
-                    index : index + 10
-                ],
-            }
-        )
+    for index in range(0, len(fields), 10):
+        chunk = fields[index:index + 10]
+
+        if chunk:
+            result.append(
+                {
+                    "type": "section",
+                    "fields": chunk,
+                }
+            )
 
     return result
 
@@ -314,9 +248,7 @@ def _render_metrics_block(
 
     fields: list[dict[str, str]] = []
 
-    for metric in _safe_list(
-        block.get("items")
-    ):
+    for metric in _safe_list(block.get("items")):
         if not isinstance(metric, dict):
             continue
 
@@ -331,25 +263,12 @@ def _render_metrics_block(
             "-",
         )
 
-        status = _status_emoji(
-            metric.get("status")
-        )
-
         if not label:
             continue
 
-        value_text = _escape_mrkdwn(
-            value
-        )
-
-        if status:
-            value_text = (
-                f"{status} {value_text}"
-            )
-
         text = (
             f"*{_escape_mrkdwn(label)}*\n"
-            f"{value_text}"
+            f"{_escape_mrkdwn(value)}"
         )
 
         fields.append(
@@ -362,19 +281,16 @@ def _render_metrics_block(
             }
         )
 
-    for index in range(
-        0,
-        len(fields),
-        10,
-    ):
-        result.append(
-            {
-                "type": "section",
-                "fields": fields[
-                    index : index + 10
-                ],
-            }
-        )
+    for index in range(0, len(fields), 10):
+        chunk = fields[index:index + 10]
+
+        if chunk:
+            result.append(
+                {
+                    "type": "section",
+                    "fields": chunk,
+                }
+            )
 
     return result
 
@@ -385,9 +301,7 @@ def _render_bullet_list_block(
 
     result: list[dict[str, Any]] = []
 
-    title = _safe_text(
-        block.get("title")
-    )
+    title = _safe_text(block.get("title"))
 
     if title:
         heading = _heading(title)
@@ -397,9 +311,7 @@ def _render_bullet_list_block(
 
     lines: list[str] = []
 
-    for item in _safe_list(
-        block.get("items")
-    ):
+    for item in _safe_list(block.get("items")):
         if isinstance(item, dict):
             text = _safe_text(
                 item.get("text")
@@ -407,26 +319,14 @@ def _render_bullet_list_block(
                 or item.get("value")
                 or item.get("description")
             )
-
-            status = _status_emoji(
-                item.get("status")
-            )
-
         else:
             text = _safe_text(item)
-            status = ""
 
         if not text:
             continue
 
-        prefix = (
-            f"{status} •"
-            if status
-            else "•"
-        )
-
         lines.append(
-            f"{prefix} {_escape_mrkdwn(text)}"
+            f"• {_escape_mrkdwn(text)}"
         )
 
     if lines:
@@ -448,9 +348,7 @@ def _render_numbered_list_block(
 
     result: list[dict[str, Any]] = []
 
-    title = _safe_text(
-        block.get("title")
-    )
+    title = _safe_text(block.get("title"))
 
     if title:
         heading = _heading(title)
@@ -494,15 +392,36 @@ def _render_numbered_list_block(
     return result
 
 
+# ============================================================
+# NATIVE SLACK TABLE
+# ============================================================
+
+def _table_cell(
+    value: Any,
+    *,
+    bold: bool = False,
+) -> dict[str, str]:
+
+    text = _safe_text(value, "-")
+
+    if bold:
+        text = f"*{_escape_mrkdwn(text)}*"
+    else:
+        text = _escape_mrkdwn(text)
+
+    return {
+        "type": "raw_text",
+        "text": text,
+    }
+
+
 def _render_table_block(
     block: dict[str, Any],
 ) -> list[dict[str, Any]]:
 
     result: list[dict[str, Any]] = []
 
-    title = _safe_text(
-        block.get("title")
-    )
+    title = _safe_text(block.get("title"))
 
     if title:
         heading = _heading(title)
@@ -512,68 +431,97 @@ def _render_table_block(
 
     columns = [
         column
-        for column in _safe_list(
-            block.get("columns")
-        )
+        for column in _safe_list(block.get("columns"))
         if isinstance(column, dict)
-    ][:5]
+    ][:MAX_TABLE_COLUMNS]
 
-    rows = _safe_list(
-        block.get("rows")
-    )
+    rows = [
+        row
+        for row in _safe_list(block.get("rows"))
+        if isinstance(row, dict)
+    ][:MAX_TABLE_ROWS]
 
     if not columns or not rows:
         return result
 
-    # Block Kit does not have a universally convenient
-    # compact table presentation for webhook messages,
-    # so render each row as readable fields.
-    for row in rows[:10]:
+    table_rows: list[list[dict[str, str]]] = []
 
-        if not isinstance(row, dict):
-            continue
+    # --------------------------------------------------------
+    # HEADER ROW
+    # --------------------------------------------------------
 
-        fields: list[dict[str, str]] = []
+    header_row: list[dict[str, str]] = []
+
+    for column in columns:
+        key = _safe_text(column.get("key"))
+
+        label = _safe_text(
+            column.get("label")
+            or column.get("title")
+            or key,
+            "-",
+        )
+
+        header_row.append(
+            _table_cell(
+                label,
+                bold=True,
+            )
+        )
+
+    table_rows.append(header_row)
+
+    # --------------------------------------------------------
+    # DATA ROWS
+    # --------------------------------------------------------
+
+    for row in rows:
+        rendered_row: list[dict[str, str]] = []
 
         for column in columns:
-            key = _safe_text(
-                column.get("key")
-            )
-
-            label = _safe_text(
-                column.get("label")
-                or column.get("title")
-                or key,
-                "-",
-            )
+            key = _safe_text(column.get("key"))
 
             value = _safe_text(
                 row.get(key),
                 "-",
             )
 
-            text = (
-                f"*{_escape_mrkdwn(label)}*\n"
-                f"{_escape_mrkdwn(value)}"
+            rendered_row.append(
+                _table_cell(value)
             )
 
-            fields.append(
-                {
-                    "type": "mrkdwn",
-                    "text": _truncate(
-                        text,
-                        MAX_FIELD_TEXT,
-                    ),
-                }
-            )
+        table_rows.append(rendered_row)
 
-        if fields:
-            result.append(
-                {
-                    "type": "section",
-                    "fields": fields[:10],
-                }
+    # --------------------------------------------------------
+    # COLUMN SETTINGS
+    # --------------------------------------------------------
+
+    column_settings: list[dict[str, Any]] = []
+
+    for column in columns:
+        setting: dict[str, Any] = {
+            "align": _safe_text(
+                column.get("align"),
+                "left",
             )
+        }
+
+        if setting["align"] not in {
+            "left",
+            "center",
+            "right",
+        }:
+            setting["align"] = "left"
+
+        column_settings.append(setting)
+
+    result.append(
+        {
+            "type": "table",
+            "rows": table_rows,
+            "column_settings": column_settings,
+        }
+    )
 
     return result
 
@@ -615,10 +563,7 @@ def _render_action_list_block(
 
             if (
                 not action_title
-                and isinstance(
-                    item.get("step"),
-                    str,
-                )
+                and isinstance(item.get("step"), str)
             ):
                 action_title = _safe_text(
                     item.get("step")
@@ -671,7 +616,7 @@ def _render_action_list_block(
 
         if metadata:
             line += (
-                "\n   "
+                "\n"
                 + " · ".join(metadata)
             )
 
@@ -694,11 +639,7 @@ def _render_divider_block(
     block: dict[str, Any],
 ) -> list[dict[str, Any]]:
 
-    return [
-        {
-            "type": "divider",
-        }
-    ]
+    return [_divider()]
 
 
 def _render_generic_block(
@@ -714,7 +655,6 @@ def _render_generic_block(
 
     renderers = {
         "text": _render_text_block,
-
         "callout": _render_callout_block,
 
         "key_value": _render_key_value_block,
@@ -739,9 +679,7 @@ def _render_generic_block(
         "divider": _render_divider_block,
     }
 
-    renderer = renderers.get(
-        block_type
-    )
+    renderer = renderers.get(block_type)
 
     if renderer is None:
         return []
@@ -757,9 +695,7 @@ def _render_blocks(
 
     for block in _safe_list(blocks):
         rendered.extend(
-            _render_generic_block(
-                block
-            )
+            _render_generic_block(block)
         )
 
         if len(rendered) >= MAX_BLOCKS:
@@ -830,10 +766,6 @@ def _build_header_blocks(
         risk.get("summary")
     )
 
-    severity_icon = _severity_emoji(
-        severity
-    )
-
     blocks: list[dict[str, Any]] = [
         {
             "type": "context",
@@ -845,15 +777,12 @@ def _build_header_blocks(
         },
         {
             "type": "header",
-            "text": _plain_text(
-                title
-            ),
+            "text": _plain_text(title),
         },
         {
             "type": "section",
             "text": _mrkdwn(
-                f"{severity_icon} *Severity:* "
-                f"{_escape_mrkdwn(severity)}"
+                f"*Severity:* {_escape_mrkdwn(severity)}"
             ),
         },
     ]
@@ -863,9 +792,7 @@ def _build_header_blocks(
             {
                 "type": "section",
                 "text": _mrkdwn(
-                    _escape_mrkdwn(
-                        subtitle
-                    )
+                    _escape_mrkdwn(subtitle)
                 ),
             }
         )
@@ -875,9 +802,7 @@ def _build_header_blocks(
             {
                 "type": "section",
                 "text": _mrkdwn(
-                    _escape_mrkdwn(
-                        summary
-                    )
+                    _escape_mrkdwn(summary)
                 ),
             }
         )
@@ -983,22 +908,22 @@ def _build_v2_notification(
         risk.get("risk_id")
     )
 
-    blocks = _build_header_blocks(
-        risk
+    blocks = _build_header_blocks(risk)
+
+    rendered_notification = _render_blocks(
+        notification_view.get("blocks")
     )
 
     blocks.extend(
-        _render_blocks(
-            notification_view.get(
-                "blocks"
-            )
-        )
+        rendered_notification
     )
 
     blocks.append(
-        _build_footer_block(
-            risk
-        )
+        _divider()
+    )
+
+    blocks.append(
+        _build_footer_block(risk)
     )
 
     actions: list[dict[str, Any]] = []
@@ -1062,7 +987,6 @@ def _build_v2_notification(
             }
         )
 
-    # Slack incoming webhook fallback text.
     title = _safe_text(
         risk.get("title"),
         "Risk Alert",
@@ -1143,9 +1067,7 @@ def build_slack_risk_view_payload(
     blocks: list[dict[str, Any]] = [
         {
             "type": "header",
-            "text": _plain_text(
-                title
-            ),
+            "text": _plain_text(title),
         }
     ]
 
@@ -1154,12 +1076,14 @@ def build_slack_risk_view_payload(
             {
                 "type": "section",
                 "text": _mrkdwn(
-                    _escape_mrkdwn(
-                        subtitle
-                    )
+                    _escape_mrkdwn(subtitle)
                 ),
             }
         )
+
+    blocks.append(
+        _divider()
+    )
 
     rendered = _render_blocks(
         view.get("blocks")
@@ -1178,12 +1102,13 @@ def build_slack_risk_view_payload(
         )
 
     blocks.append(
-        _build_footer_block(
-            risk
-        )
+        _divider()
     )
 
-    # Allows user to return to main risk notification.
+    blocks.append(
+        _build_footer_block(risk)
+    )
+
     if risk_id:
         blocks.append(
             {
@@ -1247,10 +1172,6 @@ def build_slack_notification_payload(
         "Unknown",
     )
 
-    summary = _safe_text(
-        risk.get("summary")
-    )
-
     blocks = _build_header_blocks(
         risk
     )
@@ -1274,9 +1195,9 @@ def build_slack_notification_payload(
             )
         )
 
-    if summary:
-        # Header helper already includes summary.
-        pass
+    blocks.append(
+        _divider()
+    )
 
     blocks.append(
         _build_footer_block(
