@@ -13,6 +13,7 @@ class TeamsChannelRepository:
     async def create_channel(
         self,
         client_id: str,
+        member_name: str,
         team_name: str,
         channel_url: str,
         teams_webhook_url: str,
@@ -25,6 +26,8 @@ class TeamsChannelRepository:
 
         channel = {
             "client_id": ObjectId(client_id),
+
+            "member_name": member_name,
 
             "team_name": team_name,
             "channel_name": channel_name,
@@ -64,6 +67,7 @@ class TeamsChannelRepository:
             return None
 
         allowed_fields = {
+            "member_name",
             "team_name",
             "channel_name",
             "channel_url",
@@ -73,15 +77,18 @@ class TeamsChannelRepository:
             "channel_id",
             "is_active",
         }
+
         updates = {
             key: value
             for key, value in update_data.items()
             if key in allowed_fields
         }
+
         if not updates:
             return await self.get_by_id(destination_id)
 
         updates["updated_at"] = datetime.now(timezone.utc)
+
         return await self.collection.find_one_and_update(
             {"_id": ObjectId(destination_id)},
             {"$set": updates},
@@ -111,6 +118,7 @@ class TeamsChannelRepository:
             channels.append(channel)
 
         return channels
+
 
     async def get_by_teams_identity(
         self,
@@ -166,6 +174,7 @@ class TeamsChannelRepository:
                 }
             }
         )
+
         return result.modified_count
 
 
@@ -212,12 +221,19 @@ class TeamsChannelRepository:
                 "is_active": True
             }
         )
+
         return len([name for name in team_names if name])
 
 
     async def get_recent_channels(self, limit: int = 5):
         channels = []
-        cursor = self.collection.find({}).sort("created_at", -1).limit(limit)
+
+        cursor = (
+            self.collection
+            .find({})
+            .sort("created_at", -1)
+            .limit(limit)
+        )
 
         async for channel in cursor:
             channels.append(channel)

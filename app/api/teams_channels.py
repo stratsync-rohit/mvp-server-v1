@@ -17,6 +17,7 @@ from app.repositories.client_repository import ClientRepository
 from app.repositories.teams_channel_repository import TeamsChannelRepository
 from app.services.teams_channel_service import TeamsChannelService
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +31,7 @@ def _safe_channel_data(channel):
     return {
         "id": str(channel["_id"]),
         "client_id": str(channel["client_id"]),
+        "member_name": channel.get("member_name"),
         "team_name": channel["team_name"],
         "channel_name": channel.get("channel_name"),
         "channel_url": channel["channel_url"],
@@ -47,6 +49,7 @@ def _dashboard_channel_data(channel):
     return {
         "id": str(channel["_id"]),
         "client_id": str(channel["client_id"]),
+        "member_name": channel.get("member_name"),
         "team_name": channel["team_name"],
         "team_id": channel.get("team_id"),
         "channel_name": channel.get("channel_name"),
@@ -72,15 +75,22 @@ async def update_teams_channel(
         teams_channel_repository=TeamsChannelRepository(database),
         client_repository=ClientRepository(database),
     )
+
     try:
-        channel = await service.update_channel(destination_id, payload)
+        channel = await service.update_channel(
+            destination_id,
+            payload
+        )
+
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         )
+
     except ValueError as exc:
         message = str(exc)
+
         response_status = (
             status.HTTP_409_CONFLICT
             if message in {
@@ -89,12 +99,18 @@ async def update_teams_channel(
             }
             else status.HTTP_400_BAD_REQUEST
         )
-        raise HTTPException(status_code=response_status, detail=message)
+
+        raise HTTPException(
+            status_code=response_status,
+            detail=message
+        )
+
     except Exception:
         logger.exception(
             "teams_destination_update_failed destination_id=%s",
             destination_id,
         )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to update Teams destination",
@@ -119,29 +135,43 @@ async def create_teams_channel(
 ):
     try:
 
+        # ------------------------------------------------------
         # Repositories
+        # ------------------------------------------------------
+
         client_repository = ClientRepository(database)
 
         teams_channel_repository = TeamsChannelRepository(
             database
         )
 
+        # ------------------------------------------------------
         # Service
+        # ------------------------------------------------------
+
         service = TeamsChannelService(
             teams_channel_repository=teams_channel_repository,
             client_repository=client_repository
         )
 
+        # ------------------------------------------------------
         # Create destination
+        # ------------------------------------------------------
+
         channel = await service.create_channel(
             client_id=client_id,
+            member_name=payload.member_name,
             team_name=payload.team_name,
             channel_url=str(payload.channel_url),
             teams_webhook_url=str(payload.teams_webhook_url)
         )
 
+        # ------------------------------------------------------
         # Safe response
-        # IMPORTANT: webhook URL frontend ko return nahi karna.
+        # IMPORTANT:
+        # Webhook URL frontend ko kabhi return nahi karna.
+        # ------------------------------------------------------
+
         return {
             "success": True,
             "data": _safe_channel_data(channel)
@@ -172,11 +202,15 @@ async def create_teams_channel(
         )
 
     except Exception:
+        logger.exception(
+            "teams_destination_create_failed client_id=%s",
+            client_id,
+        )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to configure Teams channel"
         )
-
 
 
 @router.get(
@@ -185,7 +219,10 @@ async def create_teams_channel(
 )
 async def get_client_teams_channels(
     client_id: str,
-    dashboard_view: bool = Query(default=False, alias="dashboard"),
+    dashboard_view: bool = Query(
+        default=False,
+        alias="dashboard"
+    ),
     database=Depends(get_database)
 ):
     try:
@@ -229,6 +266,11 @@ async def get_client_teams_channels(
         )
 
     except Exception:
+        logger.exception(
+            "teams_destinations_fetch_failed client_id=%s",
+            client_id,
+        )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to fetch Teams channels"
@@ -250,13 +292,22 @@ async def get_teams_channel(
     )
 
     try:
-        channel = await service.get_channel_by_id(destination_id)
+        channel = await service.get_channel_by_id(
+            destination_id
+        )
+
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Teams destination not found"
         )
+
     except Exception:
+        logger.exception(
+            "teams_destination_fetch_failed destination_id=%s",
+            destination_id,
+        )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to fetch Teams destination"
@@ -285,33 +336,45 @@ async def test_teams_channel(
     )
 
     try:
-        result = await service.test_channel(destination_id)
+        result = await service.test_channel(
+            destination_id
+        )
+
     except ValueError as exc:
         message = str(exc)
+
         response_status = (
             status.HTTP_404_NOT_FOUND
             if message == "Teams destination not found"
             else status.HTTP_400_BAD_REQUEST
         )
-        raise HTTPException(status_code=response_status, detail=message)
+
+        raise HTTPException(
+            status_code=response_status,
+            detail=message
+        )
+
     except (UpstreamError, UpstreamTimeoutError) as exc:
         logger.error(
-            "test_notification_failed destination_id=%s error_code=%s "
-            "http_status=%s",
+            "test_notification_failed destination_id=%s "
+            "error_code=%s http_status=%s",
             destination_id,
             getattr(exc, "error_code", "n8n_timeout"),
             getattr(exc, "http_status", None),
         )
+
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to send test notification"
         )
+
     except Exception:
-        logger.error(
+        logger.exception(
             "test_notification_failed destination_id=%s "
             "error_code=unexpected_error",
             destination_id,
         )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to test Teams destination"

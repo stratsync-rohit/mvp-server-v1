@@ -5,6 +5,7 @@ from bson import ObjectId
 from app.utils.teams_url_parser import parse_teams_channel_url
 from app.schemas.teams_channel import TeamsChannelUpdate
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +62,7 @@ class TeamsChannelService:
         client = await self.client_repository.get_client_by_id(
             str(channel["client_id"])
         )
+
         if client is None:
             logger.warning(
                 "test_notification_validation_failed destination_id=%s "
@@ -68,6 +70,7 @@ class TeamsChannelService:
                 destination_id,
             )
             raise ValueError("Client not found")
+
         if not client.get("is_active", True):
             logger.warning(
                 "test_notification_validation_failed destination_id=%s "
@@ -86,6 +89,7 @@ class TeamsChannelService:
             )
             raise ValueError("Teams webhook is not configured")
 
+        member_name = channel.get("member_name") or ""
         team_name = channel.get("team_name") or ""
         channel_name = channel.get("channel_name") or ""
 
@@ -116,8 +120,18 @@ class TeamsChannelService:
                 ],
                 "details": {
                     "facts": [
-                        {"label": "Team", "value": team_name},
-                        {"label": "Channel", "value": channel_name}
+                        {
+                            "label": "Member",
+                            "value": member_name
+                        },
+                        {
+                            "label": "Team",
+                            "value": team_name
+                        },
+                        {
+                            "label": "Channel",
+                            "value": channel_name
+                        }
                     ],
                     "groups": []
                 },
@@ -137,6 +151,7 @@ class TeamsChannelService:
 
         return {
             "destination_id": str(channel["_id"]),
+            "member_name": member_name,
             "team_name": team_name,
             "channel_name": channel_name
         }
@@ -151,8 +166,10 @@ class TeamsChannelService:
         if client is None:
             raise ValueError("Client not found")
 
-        channels = await self.teams_channel_repository.get_channels_by_client(
-            client_id
+        channels = (
+            await self.teams_channel_repository.get_channels_by_client(
+                client_id
+            )
         )
 
         return channels
@@ -163,35 +180,65 @@ class TeamsChannelService:
         destination_id: str,
         update_data: TeamsChannelUpdate
     ):
+
         if not ObjectId.is_valid(destination_id):
             raise ValueError("Invalid Teams destination ID")
 
         existing = await self.teams_channel_repository.get_by_id(
             destination_id
         )
+
         if existing is None:
             raise LookupError("Teams destination not found")
 
         updates = update_data.model_dump(exclude_unset=True)
 
+        # ------------------------------------------------------
+        # Member name validation
+        # ------------------------------------------------------
+
+        requested_member_name = updates.get("member_name")
+
+        if requested_member_name is not None:
+            requested_member_name = requested_member_name.strip()
+
+            if not requested_member_name:
+                raise ValueError("Invalid member name")
+
+            updates["member_name"] = requested_member_name
+
+        # ------------------------------------------------------
+        # Team name validation
+        # ------------------------------------------------------
+
         requested_team_name = updates.get("team_name")
+
         if requested_team_name is not None:
             requested_team_name = requested_team_name.strip()
             updates["team_name"] = requested_team_name
+
             if len(requested_team_name) < 2:
                 raise ValueError("Invalid team name")
 
+        # ------------------------------------------------------
+        # Webhook update / duplicate validation
+        # ------------------------------------------------------
+
         webhook_url = updates.get("teams_webhook_url")
+
         if "teams_webhook_url" in updates and webhook_url is None:
             updates.pop("teams_webhook_url", None)
+
         elif webhook_url is not None:
             webhook_url = str(webhook_url).strip()
+
             if webhook_url:
                 duplicate = (
                     await self.teams_channel_repository.get_by_webhook_url(
                         webhook_url
                     )
                 )
+
                 if (
                     duplicate is not None
                     and duplicate["_id"] != existing["_id"]
@@ -199,27 +246,38 @@ class TeamsChannelService:
                     raise ValueError(
                         "This Teams webhook is already configured"
                     )
+
                 updates["teams_webhook_url"] = webhook_url
+
             else:
                 updates.pop("teams_webhook_url", None)
 
+        # ------------------------------------------------------
+        # Teams channel URL update / parse
+        # ------------------------------------------------------
+
         old_team_id = existing.get("team_id")
         target_team_id = old_team_id
+
         channel_url = updates.get("channel_url")
+
         if channel_url is not None:
             channel_url = str(channel_url).strip()
             updates["channel_url"] = channel_url
+
             if (
                 channel_url != existing.get("channel_url")
                 or not existing.get("team_id")
                 or not existing.get("channel_id")
             ):
                 parsed = parse_teams_channel_url(channel_url)
+
                 required_metadata = (
                     parsed.get("channel_id"),
                     parsed.get("team_id"),
                     parsed.get("tenant_id"),
                 )
+
                 if not all(required_metadata):
                     raise ValueError("Invalid Teams channel link")
 
@@ -233,6 +291,7 @@ class TeamsChannelService:
                         channel_id=parsed["channel_id"],
                     )
                 )
+
                 if (
                     duplicate_channel is not None
                     and duplicate_channel["_id"] != existing["_id"]
@@ -248,7 +307,12 @@ class TeamsChannelService:
                     "channel_id": parsed.get("channel_id"),
                 })
 
+        # ------------------------------------------------------
+        # Keep same team name across destinations in same Team
+        # ------------------------------------------------------
+
         client_id = str(existing["client_id"])
+
         if target_team_id and target_team_id != old_team_id:
             existing_team = (
                 await self.teams_channel_repository.find_by_client_and_team_id(
@@ -256,15 +320,19 @@ class TeamsChannelService:
                     target_team_id,
                 )
             )
+
             if (
                 existing_team is not None
                 and existing_team["_id"] != existing["_id"]
             ):
                 updates["team_name"] = existing_team["team_name"]
+
             elif requested_team_name is not None:
                 updates["team_name"] = requested_team_name
+
             else:
                 updates["team_name"] = existing["team_name"]
+
         elif target_team_id and requested_team_name is not None:
             await self.teams_channel_repository.update_team_name(
                 client_id,
@@ -272,18 +340,25 @@ class TeamsChannelService:
                 requested_team_name,
             )
 
+        # ------------------------------------------------------
+        # Update destination
+        # ------------------------------------------------------
+
         updated = await self.teams_channel_repository.update_channel(
             destination_id,
             updates,
         )
+
         if updated is None:
             raise LookupError("Teams destination not found")
+
         return updated
 
 
     async def create_channel(
         self,
         client_id: str,
+        member_name: str,
         team_name: str,
         channel_url: str,
         teams_webhook_url: str
@@ -296,7 +371,6 @@ class TeamsChannelService:
         if not ObjectId.is_valid(client_id):
             raise ValueError("Client not found")
 
-
         # ------------------------------------------------------
         # 2. Check client exists
         # ------------------------------------------------------
@@ -308,7 +382,6 @@ class TeamsChannelService:
         if client is None:
             raise ValueError("Client not found")
 
-
         # ------------------------------------------------------
         # 3. Client active hona chahiye
         # ------------------------------------------------------
@@ -316,9 +389,17 @@ class TeamsChannelService:
         if not client.get("is_active", True):
             raise ValueError("Client is inactive")
 
+        # ------------------------------------------------------
+        # 4. Clean + validate member name
+        # ------------------------------------------------------
+
+        member_name = member_name.strip()
+
+        if not member_name:
+            raise ValueError("Invalid member name")
 
         # ------------------------------------------------------
-        # 4. Clean team name
+        # 5. Clean team name
         # ------------------------------------------------------
 
         team_name = team_name.strip()
@@ -326,9 +407,8 @@ class TeamsChannelService:
         if len(team_name) < 2:
             raise ValueError("Invalid team name")
 
-
         # ------------------------------------------------------
-        # 5. Teams Copy Link parse karo
+        # 6. Teams Copy Link parse karo
         # ------------------------------------------------------
 
         parsed_data = parse_teams_channel_url(
@@ -349,12 +429,12 @@ class TeamsChannelService:
                 team_id,
             )
         )
+
         if existing_team_destination is not None:
             team_name = existing_team_destination["team_name"]
 
-
         # ------------------------------------------------------
-        # 6. Duplicate webhook check
+        # 7. Duplicate webhook check
         # ------------------------------------------------------
 
         existing_webhook = (
@@ -368,9 +448,8 @@ class TeamsChannelService:
                 "This Teams webhook is already configured"
             )
 
-
         # ------------------------------------------------------
-        # 7. Duplicate Teams channel check
+        # 8. Duplicate Teams channel check
         # ------------------------------------------------------
 
         if tenant_id and team_id and channel_id:
@@ -389,14 +468,14 @@ class TeamsChannelService:
                     "This Teams channel is already configured"
                 )
 
-
         # ------------------------------------------------------
-        # 8. MongoDB me destination create karo
+        # 9. MongoDB me destination create karo
         # ------------------------------------------------------
 
         channel = (
             await self.teams_channel_repository.create_channel(
                 client_id=client_id,
+                member_name=member_name,
                 team_name=team_name,
                 channel_url=channel_url,
                 teams_webhook_url=teams_webhook_url,
