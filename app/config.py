@@ -47,6 +47,25 @@ class Settings(BaseSettings):
         default=10, alias="SLACK_REQUEST_TIMEOUT_SECONDS"
     )
 
+    # --- Slack OAuth ---
+    # These are optional so the rest of the application can run when Slack
+    # OAuth has not been configured yet. The OAuth service validates that they
+    # are present before attempting an exchange.
+    slack_client_id: str | None = Field(
+        default=None,
+        alias="SLACK_CLIENT_ID",
+    )
+    slack_client_secret: str | None = Field(
+        default=None,
+        alias="SLACK_CLIENT_SECRET",
+    )
+    slack_oauth_redirect_uri: str = Field(
+        default=(
+            "https://34.100.226.192.nip.io/api/slack/oauth/callback"
+        ),
+        alias="SLACK_OAUTH_REDIRECT_URI",
+    )
+
     # --- CORS ---
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:5173,http://localhost:3001",

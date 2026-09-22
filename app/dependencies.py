@@ -24,6 +24,9 @@ from app.repositories.risk_destination_override_repository import (
 from app.repositories.slack_destination_repository import (
     SlackDestinationRepository,
 )
+from app.repositories.slack_workspace_installation_repository import (
+    SlackWorkspaceInstallationRepository,
+)
 from app.repositories.teams_channel_repository import (
     TeamsChannelRepository,
 )
@@ -39,6 +42,10 @@ from app.services.risk_destination_override_service import (
 )
 from app.services.slack_destination_service import (
     SlackDestinationService,
+)
+from app.services.slack_oauth_service import SlackOAuthService
+from app.services.slack_workspace_installation_service import (
+    SlackWorkspaceInstallationService,
 )
 from app.services.teams_channel_service import TeamsChannelService
 
@@ -63,6 +70,12 @@ def get_slack_destination_repository(
     database: AsyncIOMotorDatabase = Depends(get_database),
 ) -> SlackDestinationRepository:
     return SlackDestinationRepository(database)
+
+
+def get_slack_workspace_installation_repository(
+    database: AsyncIOMotorDatabase = Depends(get_database),
+) -> SlackWorkspaceInstallationRepository:
+    return SlackWorkspaceInstallationRepository(database)
 
 
 def get_risk_repository(
@@ -211,6 +224,28 @@ def get_slack_destination_service(
             settings,
             webhook_url=settings.slack_n8n_webhook_url,
         ),
+    )
+
+
+# =========================================================
+# SLACK OAUTH
+# =========================================================
+
+def get_slack_oauth_service(
+    settings: Settings = Depends(get_settings),
+) -> SlackOAuthService:
+    return SlackOAuthService(settings)
+
+
+def get_slack_workspace_installation_service(
+    repository: SlackWorkspaceInstallationRepository = Depends(
+        get_slack_workspace_installation_repository
+    ),
+    client_repository: ClientRepository = Depends(get_client_repository),
+) -> SlackWorkspaceInstallationService:
+    return SlackWorkspaceInstallationService(
+        repository=repository,
+        client_repository=client_repository,
     )
 
 

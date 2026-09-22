@@ -74,3 +74,25 @@ class SlackWebhookError(AppError):
 
 class SlackWebhookTimeoutError(SlackWebhookError):
     status_code = 504
+
+
+class SlackOAuthError(AppError):
+    """Base class for safe Slack OAuth exchange failures."""
+
+    status_code = 502
+
+
+class SlackOAuthConfigurationError(SlackOAuthError):
+    status_code = 503
+
+
+class SlackOAuthTimeoutError(SlackOAuthError):
+    status_code = 504
+
+
+class SlackOAuthConnectionError(SlackOAuthError):
+    status_code = 502
+
+
+class SlackOAuthResponseError(SlackOAuthError):
+    status_code = 502

@@ -50,6 +50,10 @@ from app.api.slack_interactions import (
     router as slack_interactions_router,
 )
 
+from app.api.slack_oauth import (
+    router as slack_oauth_router,
+)
+
 from app.api.teams_channels import (
     router as teams_channels_router,
 )
@@ -174,6 +178,10 @@ def create_app() -> FastAPI:
 
     app.include_router(
         slack_interactions_router
+    )
+
+    app.include_router(
+        slack_oauth_router
     )
 
     app.include_router(

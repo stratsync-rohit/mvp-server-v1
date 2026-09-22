@@ -100,6 +100,11 @@ async def ensure_indexes(database: AsyncIOMotorDatabase) -> None:
             partialFilterExpression={"is_active": True},
             name="uniq_active_slack_destination_identity",
         )
+        await database["slack_workspace_installations"].create_index(
+            [("slack_team_id", ASCENDING)],
+            unique=True,
+            name="uniq_slack_workspace_installation_team_id",
+        )
         await database["risks"].create_index(
             [("risk_id", ASCENDING)], unique=True, name="uniq_risk_id"
         )
