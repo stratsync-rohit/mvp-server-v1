@@ -43,6 +43,7 @@ class NotificationService:
         teams_channel_repository,
         slack_destination_repository,
         client_repository,
+        risk_destination_override_service,
         n8n_service,
         slack_n8n_service,
     ):
@@ -51,6 +52,9 @@ class NotificationService:
         self.teams_channel_repository = teams_channel_repository
         self.slack_destination_repository = slack_destination_repository
         self.client_repository = client_repository
+        self.risk_destination_override_service = (
+            risk_destination_override_service
+        )
 
         # Kept temporarily so existing dependency wiring
         # does not break during migration.
@@ -117,7 +121,7 @@ class NotificationService:
             )
 
         # =========================================================
-        # LOAD RISK
+        # LOAD BASE RISK
         # =========================================================
 
         risk = (
@@ -130,6 +134,26 @@ class NotificationService:
             raise NotFoundError(
                 "Risk not found"
             )
+
+        # =========================================================
+        # APPLY DESTINATION-SPECIFIC RISK OVERRIDE
+        #
+        # Same base risk can now be sent to multiple destinations
+        # while allowing selected fields/blocks to differ.
+        #
+        # No active override:
+        #     base risk remains unchanged.
+        #
+        # Active override:
+        #     base risk + destination override = resolved risk.
+        # =========================================================
+
+        risk = (
+            await self.risk_destination_override_service.resolve_risk(
+                risk=risk,
+                destination_id=destination_id,
+            )
+        )
 
         # =========================================================
         # LOAD CLIENT
@@ -237,7 +261,7 @@ class NotificationService:
         )
 
         # =========================================================
-        # PREPARE GENERIC RISK PAYLOAD
+        # PREPARE GENERIC RESOLVED RISK PAYLOAD
         # =========================================================
 
         risk_payload = serialize_mongo_document(

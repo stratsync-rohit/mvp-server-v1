@@ -22,6 +22,10 @@ from app.api.dashboard import (
     router as dashboard_router,
 )
 
+from app.api.destinations import (
+    router as destinations_router,
+)
+
 from app.api.industries import (
     router as industries_router,
 )
@@ -32,6 +36,10 @@ from app.api.notifications import (
 
 from app.api.risks import (
     router as risks_router,
+)
+
+from app.api.risk_destination_overrides import (
+    router as risk_destination_overrides_router,
 )
 
 from app.api.slack_destinations import (
@@ -159,6 +167,11 @@ def create_app() -> FastAPI:
         slack_destinations_router
     )
 
+    # Unified Teams + Slack destinations
+    app.include_router(
+        destinations_router
+    )
+
     app.include_router(
         slack_interactions_router
     )
@@ -169,6 +182,11 @@ def create_app() -> FastAPI:
 
     app.include_router(
         risks_router
+    )
+
+    # Destination-specific risk overrides
+    app.include_router(
+        risk_destination_overrides_router
     )
 
     app.include_router(
