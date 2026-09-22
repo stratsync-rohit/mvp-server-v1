@@ -20,7 +20,15 @@ class SlackWorkspaceInstallationRepository:
         updates = {
             key: value
             for key, value in installation.items()
-            if key not in {"_id", "created_at", "updated_at", "client_id"}
+            if key not in {
+                "_id",
+                "created_at",
+                "updated_at",
+                "client_id",
+                # Channel-specific webhook metadata belongs in
+                # slack_destinations, never in the workspace record.
+                "incoming_webhook",
+            }
         }
 
         # A future trusted state flow may pass a client association. When it
@@ -39,6 +47,8 @@ class SlackWorkspaceInstallationRepository:
                     "client_id": client_id,
                     "created_at": now,
                 },
+                # Remove data written by the pre-channel-split OAuth flow.
+                "$unset": {"incoming_webhook": ""},
             },
             upsert=True,
             return_document=ReturnDocument.AFTER,

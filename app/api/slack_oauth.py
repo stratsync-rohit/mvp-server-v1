@@ -46,7 +46,11 @@ async def slack_oauth_callback(
 
     try:
         installation = await oauth_service.exchange_code(code)
-        saved = await installation_service.save_installation(installation)
+        saved, destination = (
+            await installation_service.save_installation_and_destination(
+                installation
+            )
+        )
     except SlackOAuthError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -67,22 +71,29 @@ async def slack_oauth_callback(
             detail="Unable to complete Slack workspace connection",
         ) from exc
 
-    webhook = saved.get("incoming_webhook") or {}
     logger.info(
-        "slack_workspace_connected workspace_id=%s installation_id=%s",
+        "slack_channel_connected workspace_id=%s installation_id=%s destination_id=%s",
         saved["slack_team_id"],
         saved["_id"],
+        destination["_id"] if destination else None,
     )
 
     return {
         "success": True,
-        "message": "Slack workspace connected successfully",
+        "message": (
+            "Slack channel connected successfully"
+            if destination
+            else "Slack workspace connected successfully"
+        ),
         "data": {
             "installation_id": str(saved["_id"]),
+            "destination_id": (
+                str(destination["_id"]) if destination else None
+            ),
             "workspace_id": saved["slack_team_id"],
             "workspace_name": saved["slack_team_name"],
-            "channel_id": webhook.get("channel_id"),
-            "channel_name": webhook.get("channel"),
-            "is_active": saved["is_active"],
+            "channel_id": destination.get("channel_id") if destination else None,
+            "channel_name": destination.get("channel_name") if destination else None,
+            "is_active": destination["is_active"] if destination else saved["is_active"],
         },
     }

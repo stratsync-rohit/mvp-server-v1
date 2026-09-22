@@ -393,4 +393,8 @@ async def test_slack_indexes_exist(mongo_db):
     assert "idx_slack_destinations_client_id" in indexes
     identity = indexes["uniq_active_slack_destination_identity"]
     assert identity["unique"] is True
-    assert identity["partialFilterExpression"] == {"is_active": True}
+    assert identity["partialFilterExpression"] == {
+        "is_active": True,
+        "client_id": {"$exists": True},
+        "workspace_domain": {"$exists": True},
+    }

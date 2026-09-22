@@ -10,6 +10,51 @@ class SlackDestinationRepository:
         self.collection = database["slack_destinations"]
 
 
+    async def upsert_oauth_destination(
+        self,
+        workspace_id: str,
+        workspace_name: str,
+        channel_id: str,
+        channel_name: str,
+        webhook_url: str,
+        configuration_url: str | None = None,
+        client_id=None,
+    ):
+        """Upsert one OAuth-provisioned destination by workspace/channel."""
+        now = datetime.now(timezone.utc)
+        updates = {
+            "workspace_id": workspace_id,
+            "workspace_name": workspace_name,
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "webhook_url": webhook_url,
+            "configuration_url": configuration_url,
+            "is_active": True,
+            "updated_at": now,
+        }
+
+        # Do not clear an existing client association when the current MVP
+        # has no trusted client ID from OAuth state.
+        if client_id is not None:
+            updates["client_id"] = client_id
+
+        return await self.collection.find_one_and_update(
+            {
+                "workspace_id": workspace_id,
+                "channel_id": channel_id,
+            },
+            {
+                "$set": updates,
+                "$setOnInsert": {
+                    "client_id": client_id,
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+
+
     async def create_destination(
         self,
         client_id: str,

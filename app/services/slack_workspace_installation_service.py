@@ -2,9 +2,25 @@ from bson import ObjectId
 
 
 class SlackWorkspaceInstallationService:
-    def __init__(self, repository, client_repository=None):
+    def __init__(
+        self,
+        repository,
+        client_repository=None,
+        destination_repository=None,
+    ):
         self.repository = repository
         self.client_repository = client_repository
+        self.destination_repository = destination_repository
+
+    @staticmethod
+    def _installation_data(installation):
+        if hasattr(installation, "model_dump"):
+            # Keep the document shape explicit (including nullable Slack
+            # fields such as enterprise_id) while the repository controls the
+            # client association separately.
+            return installation.model_dump()
+
+        return dict(installation)
 
     async def save_installation(
         self,
@@ -26,13 +42,7 @@ class SlackWorkspaceInstallationService:
 
             trusted_client_id = ObjectId(client_id)
 
-        if hasattr(installation, "model_dump"):
-            # Keep the document shape explicit (including nullable Slack
-            # fields such as enterprise_id) while the repository controls the
-            # client association separately.
-            installation_data = installation.model_dump()
-        else:
-            installation_data = dict(installation)
+        installation_data = self._installation_data(installation)
 
         # No browser-provided client_id is accepted here. A future signed or
         # temporary state flow can pass a validated association explicitly.
@@ -40,3 +50,55 @@ class SlackWorkspaceInstallationService:
             installation_data,
             client_id=trusted_client_id,
         )
+
+    async def save_installation_and_destination(
+        self,
+        installation,
+        client_id: str | None = None,
+    ):
+        """Persist workspace OAuth data and its optional webhook destination."""
+        installation_data = self._installation_data(installation)
+        saved_installation = await self.save_installation(
+            installation_data,
+            client_id=client_id,
+        )
+
+        webhook = installation_data.get("incoming_webhook")
+        if (
+            self.destination_repository is None
+            or not isinstance(webhook, dict)
+        ):
+            return saved_installation, None
+
+        workspace_id = installation_data.get("slack_team_id")
+        workspace_name = installation_data.get("slack_team_name")
+        channel_id = webhook.get("channel_id")
+        channel_name = webhook.get("channel")
+        webhook_url = webhook.get("url")
+
+        # Slack may issue a valid workspace installation without an incoming
+        # webhook. In that case retain the workspace and skip destination
+        # creation rather than creating an unusable record.
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (
+                workspace_id,
+                workspace_name,
+                channel_id,
+                channel_name,
+                webhook_url,
+            )
+        ):
+            return saved_installation, None
+
+        destination = await self.destination_repository.upsert_oauth_destination(
+            workspace_id=workspace_id,
+            workspace_name=workspace_name,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            webhook_url=webhook_url,
+            configuration_url=webhook.get("configuration_url"),
+            client_id=saved_installation.get("client_id"),
+        )
+
+        return saved_installation, destination

@@ -242,10 +242,14 @@ def get_slack_workspace_installation_service(
         get_slack_workspace_installation_repository
     ),
     client_repository: ClientRepository = Depends(get_client_repository),
+    destination_repository: SlackDestinationRepository = Depends(
+        get_slack_destination_repository
+    ),
 ) -> SlackWorkspaceInstallationService:
     return SlackWorkspaceInstallationService(
         repository=repository,
         client_repository=client_repository,
+        destination_repository=destination_repository,
     )
 
 

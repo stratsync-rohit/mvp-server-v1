@@ -90,15 +90,49 @@ async def ensure_indexes(database: AsyncIOMotorDatabase) -> None:
         await database["slack_destinations"].create_index(
             [("client_id", ASCENDING)], name="idx_slack_destinations_client_id"
         )
-        await database["slack_destinations"].create_index(
+        slack_destinations = database["slack_destinations"]
+        legacy_slack_partial_filter = {
+            "is_active": True,
+            "client_id": {"$exists": True},
+            "workspace_domain": {"$exists": True},
+        }
+        existing_slack_indexes = await slack_destinations.index_information()
+        existing_legacy_index = existing_slack_indexes.get(
+            "uniq_active_slack_destination_identity"
+        )
+        if (
+            existing_legacy_index is not None
+            and existing_legacy_index.get("partialFilterExpression")
+            != legacy_slack_partial_filter
+        ):
+            # The old index matched OAuth records with nullable client fields.
+            # It is safe to replace because this only changes index coverage;
+            # the new OAuth-specific unique index below protects those records.
+            await slack_destinations.drop_index(
+                "uniq_active_slack_destination_identity"
+            )
+
+        await slack_destinations.create_index(
             [
                 ("client_id", ASCENDING),
                 ("workspace_domain", ASCENDING),
                 ("channel_id", ASCENDING),
             ],
             unique=True,
-            partialFilterExpression={"is_active": True},
+            partialFilterExpression=legacy_slack_partial_filter,
             name="uniq_active_slack_destination_identity",
+        )
+        await slack_destinations.create_index(
+            [
+                ("workspace_id", ASCENDING),
+                ("channel_id", ASCENDING),
+            ],
+            unique=True,
+            partialFilterExpression={
+                "workspace_id": {"$exists": True},
+                "channel_id": {"$exists": True},
+            },
+            name="uniq_slack_destination_workspace_channel",
         )
         await database["slack_workspace_installations"].create_index(
             [("slack_team_id", ASCENDING)],

@@ -29,6 +29,7 @@ class SlackWorkspaceInstallation(BaseModel):
 
 class SlackWorkspaceInstallationData(BaseModel):
     installation_id: str
+    destination_id: str | None = None
     workspace_id: str
     workspace_name: str
     channel_id: str | None = None
