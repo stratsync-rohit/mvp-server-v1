@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from bson import ObjectId
 
 from app.config import Settings
 from app.dependencies import (
@@ -11,6 +12,9 @@ from app.dependencies import (
 )
 from app.main import app
 from app.repositories.client_repository import ClientRepository
+from app.repositories.slack_destination_repository import (
+    SlackDestinationRepository,
+)
 from app.schemas.slack_workspace_installation import (
     SlackIncomingWebhookMetadata,
     SlackWorkspaceInstallation,
@@ -369,3 +373,34 @@ async def test_oauth_indexes_exist(mongo_db):
         ("workspace_id", 1),
         ("channel_id", 1),
     ]
+
+
+async def test_oauth_destination_upsert_has_no_conflicting_update_paths(
+    mongo_db,
+):
+    repository = SlackDestinationRepository(mongo_db)
+    client_id = ObjectId()
+
+    first = await repository.upsert_oauth_destination(
+        client_id=client_id,
+        workspace_id="T-CONFLICT-CHECK",
+        workspace_name="Conflict Check Workspace",
+        channel_id="C-CONFLICT-CHECK",
+        channel_name="#first",
+        webhook_url="https://hooks.slack.com/services/T/B/first",
+        configuration_url="https://slack.com/configure/first",
+    )
+    second = await repository.upsert_oauth_destination(
+        client_id=client_id,
+        workspace_id="T-CONFLICT-CHECK",
+        workspace_name="Conflict Check Workspace",
+        channel_id="C-CONFLICT-CHECK",
+        channel_name="#updated",
+        webhook_url="https://hooks.slack.com/services/T/B/updated",
+        configuration_url="https://slack.com/configure/updated",
+    )
+
+    assert first["_id"] == second["_id"]
+    assert second["client_id"] == client_id
+    assert second["channel_name"] == "#updated"
+    assert await mongo_db["slack_destinations"].count_documents({}) == 1

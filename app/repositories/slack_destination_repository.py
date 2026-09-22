@@ -23,6 +23,7 @@ class SlackDestinationRepository:
         """Upsert one OAuth destination by client/workspace/channel."""
         now = datetime.now(timezone.utc)
         updates = {
+            "client_id": client_id,
             "workspace_id": workspace_id,
             "workspace_name": workspace_name,
             "channel_id": channel_id,
@@ -32,10 +33,6 @@ class SlackDestinationRepository:
             "is_active": True,
             "updated_at": now,
         }
-
-        # The client ID is supplied only after signed OAuth state validation.
-        if client_id is not None:
-            updates["client_id"] = client_id
 
         identity = {
             "client_id": client_id,
@@ -47,7 +44,6 @@ class SlackDestinationRepository:
             {
                 "$set": updates,
                 "$setOnInsert": {
-                    "client_id": client_id,
                     "created_at": now,
                 },
             },
