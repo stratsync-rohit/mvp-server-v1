@@ -31,11 +31,6 @@ class SlackWorkspaceInstallationRepository:
             }
         }
 
-        # A future trusted state flow may pass a client association. When it
-        # does not, leave an existing association untouched on reinstall.
-        if client_id is not None:
-            updates["client_id"] = client_id
-
         result = await self.collection.find_one_and_update(
             {"slack_team_id": slack_team_id},
             {
@@ -44,11 +39,14 @@ class SlackWorkspaceInstallationRepository:
                     "updated_at": now,
                 },
                 "$setOnInsert": {
-                    "client_id": client_id,
                     "created_at": now,
                 },
-                # Remove data written by the pre-channel-split OAuth flow.
-                "$unset": {"incoming_webhook": ""},
+                # Remove data written by earlier OAuth flows. The workspace
+                # installation is intentionally not client-owned.
+                "$unset": {
+                    "incoming_webhook": "",
+                    "client_id": "",
+                },
             },
             upsert=True,
             return_document=ReturnDocument.AFTER,

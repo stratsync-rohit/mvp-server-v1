@@ -20,7 +20,7 @@ class SlackDestinationRepository:
         configuration_url: str | None = None,
         client_id=None,
     ):
-        """Upsert one OAuth-provisioned destination by workspace/channel."""
+        """Upsert one OAuth destination by client/workspace/channel."""
         now = datetime.now(timezone.utc)
         updates = {
             "workspace_id": workspace_id,
@@ -33,16 +33,17 @@ class SlackDestinationRepository:
             "updated_at": now,
         }
 
-        # Do not clear an existing client association when the current MVP
-        # has no trusted client ID from OAuth state.
+        # The client ID is supplied only after signed OAuth state validation.
         if client_id is not None:
             updates["client_id"] = client_id
 
+        identity = {
+            "client_id": client_id,
+            "workspace_id": workspace_id,
+            "channel_id": channel_id,
+        }
         return await self.collection.find_one_and_update(
-            {
-                "workspace_id": workspace_id,
-                "channel_id": channel_id,
-            },
+            identity,
             {
                 "$set": updates,
                 "$setOnInsert": {
@@ -148,6 +149,31 @@ class SlackDestinationRepository:
             query["_id"] = {
                 "$ne": ObjectId(exclude_destination_id)
             }
+
+        return await self.collection.find_one(query)
+
+
+    async def get_active_oauth_by_identity(
+        self,
+        client_id: str,
+        workspace_id: str,
+        channel_id: str,
+        exclude_destination_id: str | None = None,
+    ):
+        if not ObjectId.is_valid(client_id):
+            return None
+
+        query = {
+            "client_id": ObjectId(client_id),
+            "workspace_id": workspace_id,
+            "channel_id": channel_id,
+            "is_active": True,
+        }
+        if (
+            exclude_destination_id
+            and ObjectId.is_valid(exclude_destination_id)
+        ):
+            query["_id"] = {"$ne": ObjectId(exclude_destination_id)}
 
         return await self.collection.find_one(query)
 

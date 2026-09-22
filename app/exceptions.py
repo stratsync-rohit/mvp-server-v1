@@ -96,3 +96,11 @@ class SlackOAuthConnectionError(SlackOAuthError):
 
 class SlackOAuthResponseError(SlackOAuthError):
     status_code = 502
+
+
+class SlackOAuthStateError(SlackOAuthError):
+    status_code = 400
+
+
+class SlackOAuthStateConfigurationError(SlackOAuthError):
+    status_code = 503

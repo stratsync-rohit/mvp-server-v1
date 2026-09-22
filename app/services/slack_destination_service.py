@@ -293,13 +293,9 @@ class SlackDestinationService:
         # Channel link update
         # ------------------------------------------------------
 
-        workspace_domain = existing[
-            "workspace_domain"
-        ]
-
-        channel_id = existing[
-            "channel_id"
-        ]
+        workspace_domain = existing.get("workspace_domain")
+        workspace_id = existing.get("workspace_id")
+        channel_id = existing["channel_id"]
 
         if "channel_link" in updates:
 
@@ -336,15 +332,26 @@ class SlackDestinationService:
 
         if target_active:
 
-            duplicate = (
-                await self.slack_destination_repository
-                .get_active_by_identity(
-                    str(existing["client_id"]),
-                    workspace_domain,
-                    channel_id,
-                    exclude_destination_id=destination_id,
+            if workspace_id:
+                duplicate = (
+                    await self.slack_destination_repository
+                    .get_active_oauth_by_identity(
+                        str(existing["client_id"]),
+                        workspace_id,
+                        channel_id,
+                        exclude_destination_id=destination_id,
+                    )
                 )
-            )
+            else:
+                duplicate = (
+                    await self.slack_destination_repository
+                    .get_active_by_identity(
+                        str(existing["client_id"]),
+                        workspace_domain,
+                        channel_id,
+                        exclude_destination_id=destination_id,
+                    )
+                )
 
             if duplicate is not None:
                 raise FileExistsError(
@@ -471,9 +478,10 @@ class SlackDestinationService:
                 "member_name"
             ),
 
-            "workspace_domain": destination[
-                "workspace_domain"
-            ],
+            "workspace_domain": (
+                destination.get("workspace_domain")
+                or destination.get("workspace_id")
+            ),
 
             "channel_id": destination[
                 "channel_id"

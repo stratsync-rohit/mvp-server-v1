@@ -122,11 +122,23 @@ async def ensure_indexes(database: AsyncIOMotorDatabase) -> None:
             partialFilterExpression=legacy_slack_partial_filter,
             name="uniq_active_slack_destination_identity",
         )
+        oauth_destination_index_name = "uniq_slack_destination_workspace_channel"
+        existing_oauth_index = existing_slack_indexes.get(
+            oauth_destination_index_name
+        )
+        oauth_destination_key = [
+            ("client_id", ASCENDING),
+            ("workspace_id", ASCENDING),
+            ("channel_id", ASCENDING),
+        ]
+        if (
+            existing_oauth_index is not None
+            and existing_oauth_index.get("key") != oauth_destination_key
+        ):
+            await slack_destinations.drop_index(oauth_destination_index_name)
+
         await slack_destinations.create_index(
-            [
-                ("workspace_id", ASCENDING),
-                ("channel_id", ASCENDING),
-            ],
+            oauth_destination_key,
             unique=True,
             partialFilterExpression={
                 "workspace_id": {"$exists": True},

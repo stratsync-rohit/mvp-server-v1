@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlencode
 
 import httpx
 
@@ -24,9 +25,29 @@ def _optional_string(value):
 
 class SlackOAuthService:
     TOKEN_EXCHANGE_URL = "https://slack.com/api/oauth.v2.access"
+    AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize"
 
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    def build_authorization_url(self, state: str) -> str:
+        if not self.settings.slack_client_id:
+            logger.error(
+                "slack_oauth_start_failed error_code=configuration_missing"
+            )
+            raise SlackOAuthConfigurationError(
+                "Slack OAuth is not configured"
+            )
+
+        query = urlencode(
+            {
+                "client_id": self.settings.slack_client_id,
+                "scope": self.settings.slack_oauth_scopes,
+                "redirect_uri": self.settings.slack_oauth_redirect_uri,
+                "state": state,
+            }
+        )
+        return f"{self.AUTHORIZE_URL}?{query}"
 
     async def exchange_code(self, code: str) -> SlackWorkspaceInstallation:
         if not code or not code.strip():

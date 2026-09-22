@@ -27,8 +27,6 @@ class SlackWorkspaceInstallationService:
         installation,
         client_id: str | None = None,
     ):
-        trusted_client_id = None
-
         if client_id is not None:
             if not ObjectId.is_valid(client_id):
                 raise LookupError("Client not found")
@@ -40,15 +38,12 @@ class SlackWorkspaceInstallationService:
             if client is None:
                 raise LookupError("Client not found")
 
-            trusted_client_id = ObjectId(client_id)
-
         installation_data = self._installation_data(installation)
 
-        # No browser-provided client_id is accepted here. A future signed or
-        # temporary state flow can pass a validated association explicitly.
+        # Workspace OAuth data remains workspace-level. Any validated client
+        # association is applied only to the destination below.
         return await self.repository.upsert_installation(
             installation_data,
-            client_id=trusted_client_id,
         )
 
     async def save_installation_and_destination(
@@ -58,9 +53,21 @@ class SlackWorkspaceInstallationService:
     ):
         """Persist workspace OAuth data and its optional webhook destination."""
         installation_data = self._installation_data(installation)
+        trusted_client_id = None
+        if client_id is not None:
+            if not ObjectId.is_valid(client_id):
+                raise LookupError("Client not found")
+            if self.client_repository is None:
+                raise LookupError("Client not found")
+            client = await self.client_repository.get_client_by_id(client_id)
+            if client is None:
+                raise LookupError("Client not found")
+            if not client.get("is_active", True):
+                raise ValueError("Client is inactive")
+            trusted_client_id = ObjectId(client_id)
+
         saved_installation = await self.save_installation(
             installation_data,
-            client_id=client_id,
         )
 
         webhook = installation_data.get("incoming_webhook")
@@ -98,7 +105,7 @@ class SlackWorkspaceInstallationService:
             channel_name=channel_name,
             webhook_url=webhook_url,
             configuration_url=webhook.get("configuration_url"),
-            client_id=saved_installation.get("client_id"),
+            client_id=trusted_client_id,
         )
 
         return saved_installation, destination

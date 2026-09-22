@@ -84,19 +84,23 @@ class SlackDestinationResponse(BaseModel):
 
     id: str
 
-    client_id: str
+    client_id: str | None = None
 
     # Optional in response for backward compatibility
     # with existing MongoDB destinations.
     member_name: str | None = None
 
-    workspace_domain: str
+    workspace_domain: str | None = None
+
+    workspace_id: str | None = None
+
+    workspace_name: str | None = None
 
     channel_id: str
 
     channel_name: str
 
-    channel_link: str
+    channel_link: str | None = None
 
     webhook_configured: bool
 

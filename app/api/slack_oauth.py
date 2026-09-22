@@ -1,10 +1,12 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 from pymongo.errors import PyMongoError
 
 from app.dependencies import (
     get_slack_oauth_service,
+    get_slack_oauth_state_service,
     get_slack_workspace_installation_service,
 )
 from app.exceptions import (
@@ -14,6 +16,7 @@ from app.schemas.slack_workspace_installation import (
     SlackOAuthCallbackResponse,
 )
 from app.services.slack_oauth_service import SlackOAuthService
+from app.services.slack_oauth_state_service import SlackOAuthStateService
 from app.services.slack_workspace_installation_service import (
     SlackWorkspaceInstallationService,
 )
@@ -28,33 +31,86 @@ router = APIRouter(
 
 
 @router.get(
+    "/start",
+    status_code=status.HTTP_302_FOUND,
+)
+async def slack_oauth_start(
+    client_id: str = Query(..., min_length=1),
+    oauth_service: SlackOAuthService = Depends(get_slack_oauth_service),
+    state_service: SlackOAuthStateService = Depends(
+        get_slack_oauth_state_service
+    ),
+):
+    try:
+        state = await state_service.create_state(client_id)
+        authorization_url = oauth_service.build_authorization_url(state)
+    except SlackOAuthError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.message,
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except PyMongoError as exc:
+        logger.exception("slack_oauth_start_client_lookup_failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to start Slack workspace connection",
+        ) from exc
+
+    return RedirectResponse(
+        url=authorization_url,
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.get(
     "/callback",
     response_model=SlackOAuthCallbackResponse,
     status_code=status.HTTP_200_OK,
 )
 async def slack_oauth_callback(
     code: str = Query(..., min_length=1),
-    state: str | None = Query(default=None),
+    state: str = Query(..., min_length=1),
     oauth_service: SlackOAuthService = Depends(get_slack_oauth_service),
+    state_service: SlackOAuthStateService = Depends(
+        get_slack_oauth_state_service
+    ),
     installation_service: SlackWorkspaceInstallationService = Depends(
         get_slack_workspace_installation_service
     ),
 ):
-    # `state` is accepted for the current MVP, but is intentionally not used
-    # for client association until a signed/temporary state flow is available.
-    del state
-
     try:
+        client_id = await state_service.validate_state(state)
         installation = await oauth_service.exchange_code(code)
         saved, destination = (
             await installation_service.save_installation_and_destination(
-                installation
+                installation,
+                client_id=client_id,
             )
         )
     except SlackOAuthError as exc:
         raise HTTPException(
             status_code=exc.status_code,
             detail=exc.message,
+        ) from exc
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         ) from exc
     except PyMongoError as exc:
         logger.exception("slack_oauth_installation_persist_failed")

@@ -65,6 +65,14 @@ class Settings(BaseSettings):
         ),
         alias="SLACK_OAUTH_REDIRECT_URI",
     )
+    slack_oauth_scopes: str = Field(
+        default="incoming-webhook,chat:write",
+        alias="SLACK_OAUTH_SCOPES",
+    )
+    slack_oauth_state_secret: str | None = Field(
+        default=None,
+        alias="SLACK_OAUTH_STATE_SECRET",
+    )
 
     # --- CORS ---
     cors_origins: str = Field(

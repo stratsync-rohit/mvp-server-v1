@@ -44,6 +44,7 @@ from app.services.slack_destination_service import (
     SlackDestinationService,
 )
 from app.services.slack_oauth_service import SlackOAuthService
+from app.services.slack_oauth_state_service import SlackOAuthStateService
 from app.services.slack_workspace_installation_service import (
     SlackWorkspaceInstallationService,
 )
@@ -235,6 +236,16 @@ def get_slack_oauth_service(
     settings: Settings = Depends(get_settings),
 ) -> SlackOAuthService:
     return SlackOAuthService(settings)
+
+
+def get_slack_oauth_state_service(
+    settings: Settings = Depends(get_settings),
+    client_repository: ClientRepository = Depends(get_client_repository),
+) -> SlackOAuthStateService:
+    return SlackOAuthStateService(
+        settings=settings,
+        client_repository=client_repository,
+    )
 
 
 def get_slack_workspace_installation_service(

@@ -31,16 +31,22 @@ router = APIRouter(
 def _safe_destination_data(destination):
     return {
         "id": str(destination["_id"]),
-        "client_id": str(destination["client_id"]),
+        "client_id": (
+            str(destination["client_id"])
+            if destination.get("client_id") is not None
+            else None
+        ),
 
         # Member assigned to this Slack destination.
         # .get() keeps old MongoDB records backward compatible.
         "member_name": destination.get("member_name"),
 
-        "workspace_domain": destination["workspace_domain"],
+        "workspace_domain": destination.get("workspace_domain"),
+        "workspace_id": destination.get("workspace_id"),
+        "workspace_name": destination.get("workspace_name"),
         "channel_id": destination["channel_id"],
         "channel_name": destination["channel_name"],
-        "channel_link": destination["channel_link"],
+        "channel_link": destination.get("channel_link"),
 
         # Never expose the actual Slack webhook URL.
         "webhook_configured": bool(
