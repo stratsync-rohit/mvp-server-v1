@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
 
+from bson import ObjectId
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
+from app.exceptions import ConflictError
 
 
 class SlackWorkspaceInstallationRepository:
@@ -12,8 +16,11 @@ class SlackWorkspaceInstallationRepository:
     async def upsert_installation(
         self,
         installation: dict,
-        client_id=None,
+        client_id: ObjectId,
     ):
+        if not isinstance(client_id, ObjectId):
+            raise ValueError("Invalid client ownership")
+
         slack_team_id = installation["slack_team_id"]
         now = datetime.now(timezone.utc)
 
@@ -31,28 +38,54 @@ class SlackWorkspaceInstallationRepository:
             }
         }
 
-        result = await self.collection.find_one_and_update(
-            {"slack_team_id": slack_team_id},
-            {
-                "$set": {
-                    **updates,
-                    "updated_at": now,
-                },
-                "$setOnInsert": {
-                    "created_at": now,
-                },
-                # Remove data written by earlier OAuth flows. The workspace
-                # installation is intentionally not client-owned.
-                "$unset": {
-                    "incoming_webhook": "",
-                    "client_id": "",
-                },
+        query = {
+            "slack_team_id": slack_team_id,
+            "$or": [
+                {"client_id": client_id},
+                {"client_id": str(client_id)},
+                {"client_id": None},
+                {"client_id": {"$exists": False}},
+            ],
+        }
+        update = {
+            "$set": {
+                **updates,
+                "client_id": client_id,
+                "updated_at": now,
             },
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
-        )
+            "$setOnInsert": {"created_at": now},
+            # Channel-specific webhook metadata belongs in
+            # slack_destinations, never in the workspace record.
+            "$unset": {"incoming_webhook": ""},
+        }
 
-        return result
+        try:
+            result = await self.collection.find_one_and_update(
+                query,
+                update,
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError as exc:
+            existing = await self.get_by_team_id(slack_team_id)
+            if existing is not None:
+                raise ConflictError(
+                    "This Slack workspace is already connected to another "
+                    "StratSync client."
+                ) from exc
+            raise
+
+        if result is not None:
+            return result
+
+        existing = await self.get_by_team_id(slack_team_id)
+        if existing is not None:
+            raise ConflictError(
+                "This Slack workspace is already connected to another "
+                "StratSync client."
+            )
+
+        raise RuntimeError("Unable to persist Slack workspace installation")
 
     async def get_by_id(self, installation_id: str):
         from bson import ObjectId

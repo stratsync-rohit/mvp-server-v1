@@ -87,6 +87,28 @@ class SlackDestinationRepository:
             }
         )
 
+    async def get_oauth_workspace_client_ids(self, workspace_id: str):
+        """Return all client IDs historically associated with a workspace."""
+        if not workspace_id:
+            return []
+
+        client_ids = set()
+        cursor = self.collection.find(
+            {
+                "workspace_id": workspace_id,
+                "client_id": {"$exists": True, "$ne": None},
+            },
+            {"client_id": 1},
+        )
+        async for destination in cursor:
+            client_id = destination.get("client_id")
+            if isinstance(client_id, ObjectId):
+                client_ids.add(str(client_id))
+            elif isinstance(client_id, str) and ObjectId.is_valid(client_id):
+                client_ids.add(client_id)
+
+        return sorted(client_ids)
+
 
     async def create_destination(
         self,

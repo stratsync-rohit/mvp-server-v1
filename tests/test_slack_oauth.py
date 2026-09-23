@@ -142,7 +142,7 @@ async def test_first_oauth_channel_creates_workspace_and_destination(
     workspace = await mongo_db["slack_workspace_installations"].find_one({})
     destination = await mongo_db["slack_destinations"].find_one({})
     assert "incoming_webhook" not in workspace
-    assert "client_id" not in workspace
+    assert str(workspace["client_id"]) == client_id
     assert destination["client_id"] is not None
     assert str(destination["client_id"]) == client_id
     assert destination["workspace_id"] == "T0C3D4N42MT"
@@ -328,6 +328,149 @@ async def test_different_clients_same_workspace_channel_do_not_overwrite(
     assert len(client_a_channels) == 1
     assert len(client_b_channels) == 0
     assert client_a_channels[0]["client_id"] == client_a_id
+
+
+async def test_different_client_cannot_connect_another_clients_workspace_channel(
+    client,
+    mongo_db,
+):
+    client_a_id = await _create_client(client, "Workspace Owner")
+    client_b_id = await _create_client(client, "Workspace Intruder")
+    oauth_service = AsyncMock()
+
+    await _connect(
+        client,
+        mongo_db,
+        oauth_service,
+        _installation(
+            "T-WORKSPACE-OWNER",
+            "Owned Workspace",
+            "C-ONE",
+            "#one",
+            "owner",
+        ),
+        client_a_id,
+    )
+    response = await _connect(
+        client,
+        mongo_db,
+        oauth_service,
+        _installation(
+            "T-WORKSPACE-OWNER",
+            "Owned Workspace Renamed",
+            "C-TWO",
+            "#two",
+            "intruder",
+        ),
+        client_b_id,
+    )
+
+    assert response.status_code == 409
+    workspace = await mongo_db["slack_workspace_installations"].find_one({})
+    assert str(workspace["client_id"]) == client_a_id
+    assert await mongo_db["slack_destinations"].count_documents({}) == 1
+
+
+async def test_legacy_null_workspace_is_backfilled_from_single_destination_owner(
+    client,
+    mongo_db,
+):
+    client_id = await _create_client(client, "Legacy Owner")
+    workspace_id = "T-LEGACY-OWNER"
+    await mongo_db["slack_workspace_installations"].insert_one(
+        {
+            "slack_team_id": workspace_id,
+            "slack_team_name": "Legacy Workspace",
+            "is_active": True,
+        }
+    )
+    await mongo_db["slack_destinations"].insert_one(
+        {
+            "client_id": ObjectId(client_id),
+            "workspace_id": workspace_id,
+            "workspace_name": "Legacy Workspace",
+            "channel_id": "C-LEGACY-ONE",
+            "channel_name": "#one",
+            "webhook_url": "https://hooks.slack.com/services/legacy",
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+    )
+
+    oauth_service = AsyncMock()
+    response = await _connect(
+        client,
+        mongo_db,
+        oauth_service,
+        _installation(
+            workspace_id,
+            "Legacy Workspace",
+            "C-LEGACY-TWO",
+            "#two",
+            "legacy-two",
+        ),
+        client_id,
+    )
+
+    assert response.status_code == 200
+    workspace = await mongo_db["slack_workspace_installations"].find_one({})
+    assert str(workspace["client_id"]) == client_id
+    assert await mongo_db["slack_destinations"].count_documents({}) == 2
+
+
+async def test_legacy_workspace_with_multiple_destination_owners_is_rejected(
+    client,
+    mongo_db,
+):
+    client_a_id = await _create_client(client, "Legacy Owner A")
+    client_b_id = await _create_client(client, "Legacy Owner B")
+    workspace_id = "T-LEGACY-INCONSISTENT"
+    await mongo_db["slack_workspace_installations"].insert_one(
+        {
+            "slack_team_id": workspace_id,
+            "slack_team_name": "Inconsistent Workspace",
+            "client_id": None,
+            "is_active": True,
+        }
+    )
+    for client_id, channel_id in (
+        (client_a_id, "C-LEGACY-A"),
+        (client_b_id, "C-LEGACY-B"),
+    ):
+        await mongo_db["slack_destinations"].insert_one(
+            {
+                "client_id": ObjectId(client_id),
+                "workspace_id": workspace_id,
+                "workspace_name": "Inconsistent Workspace",
+                "channel_id": channel_id,
+                "channel_name": channel_id,
+                "webhook_url": f"https://hooks.slack.com/services/{channel_id}",
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+
+    oauth_service = AsyncMock()
+    response = await _connect(
+        client,
+        mongo_db,
+        oauth_service,
+        _installation(
+            workspace_id,
+            "Inconsistent Workspace",
+            "C-LEGACY-NEW",
+            "#new",
+            "legacy-new",
+        ),
+        client_a_id,
+    )
+
+    assert response.status_code == 409
+    workspace = await mongo_db["slack_workspace_installations"].find_one({})
+    assert workspace["client_id"] is None
+    assert await mongo_db["slack_destinations"].count_documents({}) == 2
 
 
 async def test_connect_url_is_reusable_and_public_response_is_safe(
