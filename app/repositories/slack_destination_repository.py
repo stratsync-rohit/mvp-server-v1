@@ -2,6 +2,9 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
+from app.exceptions import ConflictError
 
 
 class SlackDestinationRepository:
@@ -20,7 +23,7 @@ class SlackDestinationRepository:
         configuration_url: str | None = None,
         client_id=None,
     ):
-        """Upsert one OAuth destination by client/workspace/channel."""
+        """Upsert one OAuth destination by workspace/channel ownership."""
         now = datetime.now(timezone.utc)
         updates = {
             "client_id": client_id,
@@ -39,16 +42,49 @@ class SlackDestinationRepository:
             "workspace_id": workspace_id,
             "channel_id": channel_id,
         }
-        return await self.collection.find_one_and_update(
-            identity,
+        existing_owner = await self.collection.find_one(
             {
-                "$set": updates,
-                "$setOnInsert": {
-                    "created_at": now,
+                "workspace_id": workspace_id,
+                "channel_id": channel_id,
+                "is_active": True,
+            }
+        )
+        if (
+            existing_owner is not None
+            and existing_owner.get("client_id") != client_id
+        ):
+            raise ConflictError(
+                "This Slack channel is already connected to another client"
+            )
+
+        try:
+            return await self.collection.find_one_and_update(
+                identity,
+                {
+                    "$set": updates,
+                    "$setOnInsert": {
+                        "created_at": now,
+                    },
                 },
-            },
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError as exc:
+            raise ConflictError(
+                "This Slack channel is already connected to another client"
+            ) from exc
+
+    async def get_oauth_owner(
+        self,
+        workspace_id: str,
+        channel_id: str,
+    ):
+        return await self.collection.find_one(
+            {
+                "workspace_id": workspace_id,
+                "channel_id": channel_id,
+                "is_active": True,
+            }
         )
 
 

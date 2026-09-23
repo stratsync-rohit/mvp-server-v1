@@ -127,7 +127,6 @@ async def ensure_indexes(database: AsyncIOMotorDatabase) -> None:
             oauth_destination_index_name
         )
         oauth_destination_key = [
-            ("client_id", ASCENDING),
             ("workspace_id", ASCENDING),
             ("channel_id", ASCENDING),
         ]
@@ -145,6 +144,27 @@ async def ensure_indexes(database: AsyncIOMotorDatabase) -> None:
                 "channel_id": {"$exists": True},
             },
             name="uniq_slack_destination_workspace_channel",
+        )
+        await database["slack_connection_tokens"].create_index(
+            [("token", ASCENDING)],
+            unique=True,
+            name="uniq_slack_connection_token",
+        )
+        await database["slack_connection_tokens"].create_index(
+            [("client_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression={"is_active": True},
+            name="uniq_active_slack_connection_token_client",
+        )
+        await database["slack_oauth_states"].create_index(
+            [("state", ASCENDING)],
+            unique=True,
+            name="uniq_slack_oauth_state",
+        )
+        await database["slack_oauth_states"].create_index(
+            [("expires_at", ASCENDING)],
+            expireAfterSeconds=0,
+            name="ttl_slack_oauth_state",
         )
         await database["slack_workspace_installations"].create_index(
             [("slack_team_id", ASCENDING)],

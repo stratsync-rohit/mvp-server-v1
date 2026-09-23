@@ -5,17 +5,20 @@ from fastapi.responses import RedirectResponse
 from pymongo.errors import PyMongoError
 
 from app.dependencies import (
+    get_slack_connection_token_service,
     get_slack_oauth_service,
     get_slack_oauth_state_service,
     get_slack_workspace_installation_service,
 )
 from app.exceptions import (
+    ConflictError,
     SlackOAuthError,
 )
 from app.schemas.slack_workspace_installation import (
     SlackOAuthCallbackResponse,
 )
 from app.services.slack_oauth_service import SlackOAuthService
+from app.services.slack_connection_token_service import SlackConnectionTokenService
 from app.services.slack_oauth_state_service import SlackOAuthStateService
 from app.services.slack_workspace_installation_service import (
     SlackWorkspaceInstallationService,
@@ -35,14 +38,22 @@ router = APIRouter(
     status_code=status.HTTP_302_FOUND,
 )
 async def slack_oauth_start(
-    client_id: str = Query(..., min_length=1),
+    token: str = Query(..., min_length=1),
+    token_service: SlackConnectionTokenService = Depends(
+        get_slack_connection_token_service
+    ),
     oauth_service: SlackOAuthService = Depends(get_slack_oauth_service),
     state_service: SlackOAuthStateService = Depends(
         get_slack_oauth_state_service
     ),
 ):
     try:
-        state = await state_service.create_state(client_id)
+        connection = await token_service.resolve(token)
+        client_id = str(connection["client_id"])
+        state = await state_service.create_state(
+            client_id,
+            connection_token_id=connection["_id"],
+        )
         authorization_url = oauth_service.build_authorization_url(state)
     except SlackOAuthError as exc:
         raise HTTPException(
@@ -52,7 +63,7 @@ async def slack_oauth_start(
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
+            detail="Slack connection token not found",
         ) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -97,6 +108,7 @@ async def slack_oauth_callback(
                 client_id=client_id,
             )
         )
+        await state_service.mark_used(state)
     except SlackOAuthError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -110,6 +122,16 @@ async def slack_oauth_callback(
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.message,
+        ) from exc
+    except FileExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
     except PyMongoError as exc:

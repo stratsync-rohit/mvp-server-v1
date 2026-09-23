@@ -15,6 +15,9 @@ from app.repositories.client_repository import ClientRepository
 from app.repositories.slack_destination_repository import (
     SlackDestinationRepository,
 )
+from app.repositories.slack_oauth_state_repository import (
+    SlackOAuthStateRepository,
+)
 from app.schemas.slack_workspace_installation import (
     SlackIncomingWebhookMetadata,
     SlackWorkspaceInstallation,
@@ -79,6 +82,7 @@ async def _connect(client, mongo_db, oauth_service, installation, client_id):
     state_service = SlackOAuthStateService(
         settings=settings,
         client_repository=ClientRepository(mongo_db),
+        repository=SlackOAuthStateRepository(mongo_db),
     )
     real_oauth_service = SlackOAuthService(settings)
     oauth_service.build_authorization_url = (
@@ -89,9 +93,16 @@ async def _connect(client, mongo_db, oauth_service, installation, client_id):
         lambda: state_service
     )
 
+    connect_url_response = await client.get(
+        f"/api/clients/{client_id}/slack/connect-url",
+    )
+    assert connect_url_response.status_code == 200
+    connect_url = connect_url_response.json()["data"]["connect_url"]
+    token = parse_qs(urlparse(connect_url).query)["token"][0]
+
     start = await client.get(
         "/api/slack/oauth/start",
-        params={"client_id": client_id},
+        params={"token": token},
         follow_redirects=False,
     )
     assert start.status_code == 302
@@ -136,6 +147,8 @@ async def test_first_oauth_channel_creates_workspace_and_destination(
     assert str(destination["client_id"]) == client_id
     assert destination["workspace_id"] == "T0C3D4N42MT"
     assert destination["channel_id"] == "C0C32Q6U1JB"
+    assert destination["configuration_url"].endswith("/first")
+    assert destination["webhook_url"].endswith("/first")
     assert "xoxb-private-first" not in response.text
     assert "hooks.slack.com" not in response.text
     assert "slack.com/apps/configure/first" not in response.text
@@ -303,9 +316,9 @@ async def test_different_clients_same_workspace_channel_do_not_overwrite(
         client, mongo_db, oauth_service, installation, client_b_id
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 409
     assert await mongo_db["slack_workspace_installations"].count_documents({}) == 1
-    assert await mongo_db["slack_destinations"].count_documents({}) == 2
+    assert await mongo_db["slack_destinations"].count_documents({}) == 1
     client_a_channels = (
         await client.get(f"/api/clients/{client_a_id}/slack/channels")
     ).json()["data"]
@@ -313,9 +326,72 @@ async def test_different_clients_same_workspace_channel_do_not_overwrite(
         await client.get(f"/api/clients/{client_b_id}/slack/channels")
     ).json()["data"]
     assert len(client_a_channels) == 1
-    assert len(client_b_channels) == 1
+    assert len(client_b_channels) == 0
     assert client_a_channels[0]["client_id"] == client_a_id
-    assert client_b_channels[0]["client_id"] == client_b_id
+
+
+async def test_connect_url_is_reusable_and_public_response_is_safe(
+    client,
+    mongo_db,
+):
+    client_id = await _create_client(client, "Reusable Client")
+
+    first = await client.get(f"/api/clients/{client_id}/slack/connect-url")
+    second = await client.get(f"/api/clients/{client_id}/slack/connect-url")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_url = first.json()["data"]["connect_url"]
+    second_url = second.json()["data"]["connect_url"]
+    assert first_url == second_url
+    assert client_id not in first_url
+    assert "access_token" not in first.text
+    assert "webhook" not in first.text.lower()
+    assert await mongo_db["slack_connection_tokens"].count_documents({}) == 1
+
+
+async def test_client_id_start_parameter_is_not_accepted(client):
+    client_id = await _create_client(client, "Secure Start Client")
+    response = await client.get(
+        "/api/slack/oauth/start",
+        params={"client_id": client_id},
+        follow_redirects=False,
+    )
+    assert response.status_code == 422
+
+
+async def test_oauth_state_is_persistent_single_use_and_replay_is_rejected(
+    client,
+    mongo_db,
+):
+    client_id = await _create_client(client, "Single Use Client")
+    oauth_service = AsyncMock()
+    installation = _installation(
+        "T-STATE-CLIENT",
+        "State Workspace",
+        "C-STATE-CLIENT",
+        "#state-alerts",
+        "state",
+    )
+    oauth_service.exchange_code.return_value = installation
+
+    first = await _connect(
+        client, mongo_db, oauth_service, installation, client_id
+    )
+    assert first.status_code == 200
+    assert await mongo_db["slack_oauth_states"].count_documents({}) == 1
+    state_record = await mongo_db["slack_oauth_states"].find_one({})
+    assert state_record["used"] is True
+    assert str(state_record["client_id"]) == client_id
+    assert state_record["connection_token_id"] is not None
+
+    # The helper creates a fresh state for each attempt; replay the consumed
+    # callback state directly to verify the one-time check.
+    replay = await client.get(
+        "/api/slack/oauth/callback",
+        params={"code": "test-code", "state": state_record["state"]},
+    )
+    assert replay.status_code == 400
 
 
 async def test_tampered_oauth_state_is_rejected_before_code_exchange(
@@ -328,6 +404,7 @@ async def test_tampered_oauth_state_is_rejected_before_code_exchange(
     state_service = SlackOAuthStateService(
         settings=settings,
         client_repository=ClientRepository(mongo_db),
+        repository=SlackOAuthStateRepository(mongo_db),
     )
     oauth_service.build_authorization_url = (
         SlackOAuthService(settings).build_authorization_url
@@ -337,13 +414,19 @@ async def test_tampered_oauth_state_is_rejected_before_code_exchange(
         lambda: state_service
     )
 
+    connect_url_response = await client.get(
+        f"/api/clients/{client_id}/slack/connect-url",
+    )
+    token = parse_qs(
+        urlparse(connect_url_response.json()["data"]["connect_url"]).query
+    )["token"][0]
     start = await client.get(
         "/api/slack/oauth/start",
-        params={"client_id": client_id},
+        params={"token": token},
         follow_redirects=False,
     )
     state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
-    tampered_state = f"{state[:-1]}{'A' if state[-1] != 'A' else 'B'}"
+    tampered_state = f"{state}tampered"
 
     response = await client.get(
         "/api/slack/oauth/callback",
@@ -369,10 +452,17 @@ async def test_oauth_indexes_exist(mongo_db):
     ]
     assert destination_index["unique"] is True
     assert destination_index["key"] == [
-        ("client_id", 1),
         ("workspace_id", 1),
         ("channel_id", 1),
     ]
+
+    token_indexes = await mongo_db["slack_connection_tokens"].index_information()
+    assert token_indexes["uniq_slack_connection_token"]["unique"] is True
+    assert token_indexes["uniq_active_slack_connection_token_client"]["unique"] is True
+
+    state_indexes = await mongo_db["slack_oauth_states"].index_information()
+    assert state_indexes["uniq_slack_oauth_state"]["unique"] is True
+    assert state_indexes["ttl_slack_oauth_state"]["expireAfterSeconds"] == 0
 
 
 async def test_oauth_destination_upsert_has_no_conflicting_update_paths(

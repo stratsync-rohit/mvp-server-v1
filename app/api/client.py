@@ -1,6 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pymongo.errors import PyMongoError
 
 from app.database import get_database
+from app.dependencies import get_slack_connection_token_service
 from app.repositories.client_repository import ClientRepository
 from app.schemas.client import (
     ClientCreate,
@@ -9,7 +13,9 @@ from app.schemas.client import (
     ClientUpdate,
     ClientUpdateResponse,
 )
+from app.schemas.slack_connection import SlackConnectUrlResponse
 from app.services.client_service import ClientService
+from app.services.slack_connection_token_service import SlackConnectionTokenService
 
 
 router = APIRouter(
@@ -106,6 +112,35 @@ async def get_clients(
             detail="Unable to fetch clients"
         )    
 
+
+
+@router.get(
+    "/{client_id}/slack/connect-url",
+    response_model=SlackConnectUrlResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_slack_connect_url(
+    client_id: str,
+    request: Request,
+    token_service: SlackConnectionTokenService = Depends(
+        get_slack_connection_token_service
+    ),
+):
+    try:
+        connection = await token_service.get_or_create_for_client(client_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to create Slack connect URL",
+        ) from exc
+
+    start_url = request.url_for("slack_oauth_start")
+    connect_url = f"{start_url}?{urlencode({'token': connection['token']})}"
+    return {"success": True, "data": {"connect_url": connect_url}}
 
 
 @router.get(

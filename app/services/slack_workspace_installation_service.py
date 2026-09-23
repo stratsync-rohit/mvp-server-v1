@@ -1,5 +1,7 @@
 from bson import ObjectId
 
+from app.exceptions import ConflictError
+
 
 class SlackWorkspaceInstallationService:
     def __init__(
@@ -66,6 +68,40 @@ class SlackWorkspaceInstallationService:
                 raise ValueError("Client is inactive")
             trusted_client_id = ObjectId(client_id)
 
+        webhook = installation_data.get("incoming_webhook")
+        workspace_id = installation_data.get("slack_team_id")
+        workspace_name = installation_data.get("slack_team_name")
+        channel_id = webhook.get("channel_id") if isinstance(webhook, dict) else None
+        channel_name = webhook.get("channel") if isinstance(webhook, dict) else None
+        webhook_url = webhook.get("url") if isinstance(webhook, dict) else None
+
+        # Check ownership before updating the workspace-level installation so
+        # a cross-client conflict cannot partially update OAuth credentials.
+        if (
+            self.destination_repository is not None
+            and all(
+                isinstance(value, str) and value.strip()
+                for value in (
+                    workspace_id,
+                    workspace_name,
+                    channel_id,
+                    channel_name,
+                    webhook_url,
+                )
+            )
+        ):
+            existing_owner = await self.destination_repository.get_oauth_owner(
+                workspace_id,
+                channel_id,
+            )
+            if (
+                existing_owner is not None
+                and existing_owner.get("client_id") != trusted_client_id
+            ):
+                raise ConflictError(
+                    "This Slack channel is already connected to another client"
+                )
+
         saved_installation = await self.save_installation(
             installation_data,
         )
@@ -76,12 +112,6 @@ class SlackWorkspaceInstallationService:
             or not isinstance(webhook, dict)
         ):
             return saved_installation, None
-
-        workspace_id = installation_data.get("slack_team_id")
-        workspace_name = installation_data.get("slack_team_name")
-        channel_id = webhook.get("channel_id")
-        channel_name = webhook.get("channel")
-        webhook_url = webhook.get("url")
 
         # Slack may issue a valid workspace installation without an incoming
         # webhook. In that case retain the workspace and skip destination

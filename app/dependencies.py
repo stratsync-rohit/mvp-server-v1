@@ -24,6 +24,12 @@ from app.repositories.risk_destination_override_repository import (
 from app.repositories.slack_destination_repository import (
     SlackDestinationRepository,
 )
+from app.repositories.slack_connection_token_repository import (
+    SlackConnectionTokenRepository,
+)
+from app.repositories.slack_oauth_state_repository import (
+    SlackOAuthStateRepository,
+)
 from app.repositories.slack_workspace_installation_repository import (
     SlackWorkspaceInstallationRepository,
 )
@@ -44,6 +50,9 @@ from app.services.slack_destination_service import (
     SlackDestinationService,
 )
 from app.services.slack_oauth_service import SlackOAuthService
+from app.services.slack_connection_token_service import (
+    SlackConnectionTokenService,
+)
 from app.services.slack_oauth_state_service import SlackOAuthStateService
 from app.services.slack_workspace_installation_service import (
     SlackWorkspaceInstallationService,
@@ -238,13 +247,38 @@ def get_slack_oauth_service(
     return SlackOAuthService(settings)
 
 
+def get_slack_connection_token_repository(
+    database: AsyncIOMotorDatabase = Depends(get_database),
+) -> SlackConnectionTokenRepository:
+    return SlackConnectionTokenRepository(database)
+
+
+def get_slack_oauth_state_repository(
+    database: AsyncIOMotorDatabase = Depends(get_database),
+) -> SlackOAuthStateRepository:
+    return SlackOAuthStateRepository(database)
+
+
+def get_slack_connection_token_service(
+    repository: SlackConnectionTokenRepository = Depends(
+        get_slack_connection_token_repository
+    ),
+    client_repository: ClientRepository = Depends(get_client_repository),
+) -> SlackConnectionTokenService:
+    return SlackConnectionTokenService(repository, client_repository)
+
+
 def get_slack_oauth_state_service(
     settings: Settings = Depends(get_settings),
     client_repository: ClientRepository = Depends(get_client_repository),
+    repository: SlackOAuthStateRepository = Depends(
+        get_slack_oauth_state_repository
+    ),
 ) -> SlackOAuthStateService:
     return SlackOAuthStateService(
         settings=settings,
         client_repository=client_repository,
+        repository=repository,
     )
 
 
