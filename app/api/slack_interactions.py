@@ -6,17 +6,19 @@ import httpx
 from fastapi import (
     APIRouter,
     Depends,
-    Form,
     HTTPException,
+    Request,
     status,
 )
 
+from app.config import Settings, get_settings
 from app.dependencies import get_risk_service
 from app.services.risk_service import RiskService
 from app.services.slack_block_renderer import (
     build_slack_notification_payload,
     build_slack_risk_view_payload,
 )
+from app.services.slack_signature_service import verify_slack_signature
 
 
 logger = logging.getLogger(__name__)
@@ -186,9 +188,44 @@ async def _send_slack_response(
     status_code=status.HTTP_200_OK,
 )
 async def slack_interactions(
-    payload: str = Form(...),
+    request: Request,
     service: RiskService = Depends(get_risk_service),
+    settings: Settings = Depends(get_settings),
 ):
+    raw_body = await request.body()
+
+    if not settings.slack_signing_secret:
+        logger.error("slack_signature_verification_not_configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Slack request verification is not configured",
+        )
+
+    timestamp = request.headers.get("X-Slack-Request-Timestamp")
+    signature = request.headers.get("X-Slack-Signature")
+
+    if not verify_slack_signature(
+        raw_body=raw_body,
+        timestamp=timestamp,
+        signature=signature,
+        signing_secret=settings.slack_signing_secret,
+    ):
+        logger.warning("slack_signature_rejected")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Slack signature",
+        )
+
+    logger.info("slack_signature_verified")
+
+    form = await request.form()
+    payload = form.get("payload")
+    if not isinstance(payload, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Slack interaction payload",
+        )
+
     # -----------------------------------------------------
     # Parse Slack form-urlencoded payload
     # -----------------------------------------------------

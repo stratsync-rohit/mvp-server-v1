@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     )
 
     # --- Slack OAuth ---
+    slack_signing_secret: str | None = Field(
+        default=None,
+        alias="SLACK_SIGNING_SECRET",
+    )
+
     # These are optional so the rest of the application can run when Slack
     # OAuth has not been configured yet. The OAuth service validates that they
     # are present before attempting an exchange.
