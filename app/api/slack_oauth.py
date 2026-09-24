@@ -35,13 +35,150 @@ router = APIRouter(
 )
 
 
+_HTML_STYLES = """
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  background: #f3f6fa;
+  color: #172033;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background: #f3f6fa;
+}
+
+.oauth-card {
+  width: min(100%, 560px);
+  padding: 44px 40px 36px;
+  border: 1px solid #e3e8ef;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 18px 45px rgba(31, 45, 61, 0.09);
+  text-align: center;
+}
+
+.oauth-icon {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 24px;
+  border-radius: 50%;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.oauth-icon.success {
+  color: #16845a;
+  background: #e8f7ef;
+  box-shadow: inset 0 0 0 8px #f4fcf7;
+}
+
+.oauth-icon.error {
+  color: #b42318;
+  background: #fff0ee;
+  box-shadow: inset 0 0 0 8px #fff8f7;
+}
+
+h1 {
+  margin: 0;
+  color: #172033;
+  font-size: clamp(1.55rem, 4vw, 1.9rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.oauth-message {
+  max-width: 430px;
+  margin: 14px auto 0;
+  color: #5b6678;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.oauth-details {
+  display: grid;
+  gap: 10px;
+  margin: 28px 0 0;
+  text-align: left;
+}
+
+.oauth-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 13px 16px;
+  border: 1px solid #e7ebf0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.oauth-detail-label {
+  color: #6a7586;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.oauth-detail-value {
+  min-width: 0;
+  color: #263247;
+  font-size: 0.95rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.oauth-hint {
+  margin: 28px 0 0;
+  color: #8993a2;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 480px) {
+  .oauth-card {
+    padding: 34px 22px 28px;
+    border-radius: 16px;
+  }
+
+  .oauth-detail-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .oauth-detail-value {
+    text-align: left;
+  }
+}
+"""
+
+
 def _html_page(
     *,
     title: str,
     message: str,
     status_code: int,
+    variant: str,
+    hint: str,
     details_html: str = "",
 ) -> HTMLResponse:
+    icon = "✓" if variant == "success" else "!"
     return HTMLResponse(
         content=(
             "<!doctype html>"
@@ -50,11 +187,15 @@ def _html_page(
             "<meta name=\"viewport\" "
             "content=\"width=device-width, initial-scale=1\">"
             f"<title>{escape(title)}</title>"
+            f"<style>{_HTML_STYLES}</style>"
             "</head><body>"
-            "<main>"
+            "<main class=\"oauth-card\">"
+            f"<div class=\"oauth-icon {escape(variant)}\" "
+            f"aria-hidden=\"true\">{icon}</div>"
             f"<h1>{escape(title)}</h1>"
-            f"<p>{escape(message)}</p>"
+            f"<p class=\"oauth-message\">{escape(message)}</p>"
             f"{details_html}"
+            f"<p class=\"oauth-hint\">{escape(hint)}</p>"
             "</main></body></html>"
         ),
         status_code=status_code,
@@ -110,6 +251,8 @@ def _oauth_error_response(
         title=title,
         message=message,
         status_code=response_status or status_code,
+        variant="error",
+        hint="You can close this window and try again when ready.",
     )
 
 
@@ -120,18 +263,35 @@ def _oauth_success_response(
     details = []
     workspace_name = saved.get("slack_team_name")
     if isinstance(workspace_name, str) and workspace_name:
-        details.append(f"<p>Workspace: {escape(workspace_name)}</p>")
+        details.append(
+            "<div class=\"oauth-detail-row\">"
+            "<span class=\"oauth-detail-label\">Workspace</span>"
+            f"<span class=\"oauth-detail-value\">"
+            f"{escape(workspace_name)}</span></div>"
+        )
 
     channel_name = destination.get("channel_name") if destination else None
     if isinstance(channel_name, str) and channel_name:
-        details.append(f"<p>Channel: {escape(channel_name)}</p>")
+        details.append(
+            "<div class=\"oauth-detail-row\">"
+            "<span class=\"oauth-detail-label\">Channel</span>"
+            f"<span class=\"oauth-detail-value\">"
+            f"{escape(channel_name)}</span></div>"
+        )
 
     return _html_page(
         title="Slack Connected Successfully",
-        message="Your Slack workspace/channel has been connected to StratSync. "
-        "You can now close this window.",
+        message="Your Slack workspace and channel are now connected to "
+        "StratSync.",
         status_code=status.HTTP_200_OK,
-        details_html="".join(details),
+        variant="success",
+        hint="You can now close this window.",
+        details_html=(
+            f"<section class=\"oauth-details\" "
+            f"aria-label=\"Connection details\">{''.join(details)}</section>"
+            if details
+            else ""
+        ),
     )
 
 

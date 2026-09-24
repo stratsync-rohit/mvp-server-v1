@@ -157,8 +157,22 @@ async def test_oauth_callback_returns_clean_success_html(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "Slack Connected Successfully" in response.text
-    assert "Workspace: Redirect &lt;Workspace&gt;" in response.text
-    assert "Channel: #redirects &amp; alerts" in response.text
+    assert "oauth-card" in response.text
+    assert "oauth-icon success" in response.text
+    assert (
+        "Your Slack workspace and channel are now connected to StratSync."
+        in response.text
+    )
+    assert '<span class="oauth-detail-label">Workspace</span>' in response.text
+    assert (
+        '<span class="oauth-detail-value">Redirect &lt;Workspace&gt;</span>'
+        in response.text
+    )
+    assert '<span class="oauth-detail-label">Channel</span>' in response.text
+    assert (
+        '<span class="oauth-detail-value">#redirects &amp; alerts</span>'
+        in response.text
+    )
     assert "<Workspace>" not in response.text
     assert "location" not in response.headers
     assert not response.text.lstrip().startswith("{")
@@ -217,6 +231,9 @@ async def test_browser_oauth_errors_return_clean_html(
     assert response.headers["content-type"].startswith("text/html")
     assert title in response.text
     assert message in response.text
+    assert "oauth-card" in response.text
+    assert "oauth-icon error" in response.text
+    assert "oauth-hint" in response.text
     assert "location" not in response.headers
     assert "test-code" not in response.text
 
