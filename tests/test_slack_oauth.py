@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from bson import ObjectId
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.api import client as client_api
 from app.dependencies import (
     get_slack_oauth_service,
@@ -94,11 +94,9 @@ async def _connect(
     oauth_service,
     installation,
     client_id,
-    callback_settings=None,
 ):
-    app.dependency_overrides.pop(get_settings, None)
     oauth_service.exchange_code.return_value = installation
-    settings = callback_settings or _test_settings()
+    settings = _test_settings()
     state_service = SlackOAuthStateService(
         settings=settings,
         client_repository=ClientRepository(mongo_db),
@@ -128,9 +126,6 @@ async def _connect(
     assert start.status_code == 302
     state = parse_qs(urlparse(start.headers["location"]).query)["state"][0]
 
-    if callback_settings is not None:
-        app.dependency_overrides[get_settings] = lambda: settings
-
     return await client.get(
         "/api/slack/oauth/callback",
         params={"code": "test-code", "state": state},
@@ -138,14 +133,7 @@ async def _connect(
     )
 
 
-def _redirect_settings():
-    return Settings.model_construct(
-        slack_oauth_success_url="https://frontend.test/integrations/slack/success",
-        slack_oauth_error_url="https://frontend.test/integrations/slack/error",
-    )
-
-
-async def test_oauth_callback_redirects_to_configured_success_url(
+async def test_oauth_callback_returns_clean_success_html(
     client,
     mongo_db,
 ):
@@ -153,68 +141,95 @@ async def test_oauth_callback_redirects_to_configured_success_url(
     oauth_service = AsyncMock()
     installation = _installation(
         "T-REDIRECT-CLIENT",
-        "Redirect Workspace",
+        "Redirect <Workspace>",
         "C-REDIRECT-CHANNEL",
-        "#redirects",
+        "#redirects & alerts",
         "redirect",
     )
-    settings = _redirect_settings()
-
     response = await _connect(
         client,
         mongo_db,
         oauth_service,
         installation,
         client_id,
-        callback_settings=settings,
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == settings.slack_oauth_success_url
-    assert response.text == ""
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Slack Connected Successfully" in response.text
+    assert "Workspace: Redirect &lt;Workspace&gt;" in response.text
+    assert "Channel: #redirects &amp; alerts" in response.text
+    assert "<Workspace>" not in response.text
+    assert "location" not in response.headers
+    assert not response.text.lstrip().startswith("{")
     assert await mongo_db["slack_workspace_installations"].count_documents({}) == 1
     assert await mongo_db["slack_destinations"].count_documents({}) == 1
+    workspace = await mongo_db["slack_workspace_installations"].find_one({})
+    destination = await mongo_db["slack_destinations"].find_one({})
+    for sensitive_value in (
+        str(workspace["_id"]),
+        str(destination["_id"]),
+        workspace["slack_team_id"],
+        destination["channel_id"],
+        "xoxb-private-redirect",
+        "https://hooks.slack.com/services/T/B/redirect",
+        "installation_id",
+        "destination_id",
+        "token_hash",
+        "ciphertext",
+        "client-secret",
+        "state-secret",
+    ):
+        assert sensitive_value not in response.text
 
 
 @pytest.mark.parametrize(
-    ("params", "reason"),
+    ("params", "status_code", "title", "message"),
     [
-        ({"error": "access_denied"}, "oauth_denied"),
-        ({"code": "test-code"}, "invalid_state"),
+        (
+            {"error": "access_denied"},
+            400,
+            "Slack Connection Cancelled",
+            "Slack authorization was not completed.",
+        ),
+        (
+            {"code": "test-code"},
+            400,
+            "Slack Connection Failed",
+            "This connection link is invalid or has expired.",
+        ),
     ],
 )
-async def test_browser_oauth_errors_redirect_with_safe_reason(
+async def test_browser_oauth_errors_return_clean_html(
     client,
     params,
-    reason,
+    status_code,
+    title,
+    message,
 ):
-    settings = _redirect_settings()
-    app.dependency_overrides[get_settings] = lambda: settings
-
     response = await client.get(
         "/api/slack/oauth/callback",
         params=params,
         follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == (
-        f"{settings.slack_oauth_error_url}?reason={reason}"
-    )
-    assert response.text == ""
+    assert response.status_code == status_code
+    assert response.headers["content-type"].startswith("text/html")
+    assert title in response.text
+    assert message in response.text
+    assert "location" not in response.headers
+    assert "test-code" not in response.text
 
 
-async def test_oauth_exchange_failure_redirects_safely(
+async def test_oauth_exchange_failure_returns_clean_html(
     client,
 ):
-    settings = _redirect_settings()
     oauth_service = AsyncMock()
     oauth_service.exchange_code.side_effect = SlackOAuthResponseError(
         "Slack rejected the OAuth exchange"
     )
     state_service = AsyncMock()
     state_service.validate_state.return_value = "client-id"
-    app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_slack_oauth_service] = lambda: oauth_service
     app.dependency_overrides[get_slack_oauth_state_service] = (
         lambda: state_service
@@ -226,17 +241,19 @@ async def test_oauth_exchange_failure_redirects_safely(
         follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == (
-        f"{settings.slack_oauth_error_url}?reason=oauth_exchange_failed"
-    )
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Slack Connection Failed" in response.text
+    assert "We could not complete the Slack connection." in response.text
+    assert "location" not in response.headers
+    assert "test-code" not in response.text
+    assert "valid-state" not in response.text
     state_service.validate_state.assert_awaited_once_with("valid-state")
 
 
-async def test_workspace_conflict_redirects_without_exposing_sensitive_values(
+async def test_workspace_conflict_returns_clean_html_without_sensitive_values(
     client,
 ):
-    settings = _redirect_settings()
     oauth_service = AsyncMock()
     state_service = AsyncMock()
     installation_service = AsyncMock()
@@ -251,7 +268,6 @@ async def test_workspace_conflict_redirects_without_exposing_sensitive_values(
     installation_service.save_installation_and_destination.side_effect = (
         ConflictError("This Slack workspace is already connected")
     )
-    app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_slack_oauth_service] = lambda: oauth_service
     app.dependency_overrides[get_slack_oauth_state_service] = (
         lambda: state_service
@@ -266,18 +282,18 @@ async def test_workspace_conflict_redirects_without_exposing_sensitive_values(
         follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    location = response.headers["location"]
-    assert location == (
-        f"{settings.slack_oauth_error_url}?reason=workspace_conflict"
-    )
+    assert response.status_code == 409
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Slack Connection Failed" in response.text
+    assert "already connected to another StratSync client" in response.text
+    assert "location" not in response.headers
     for sensitive_value in (
         "oauth-code",
         "oauth-state",
         "xoxb-private-conflict",
         "https://hooks.slack.com/services/conflict",
     ):
-        assert sensitive_value not in location
+        assert sensitive_value not in response.text
     state_service.validate_state.assert_awaited_once_with("oauth-state")
     oauth_service.exchange_code.assert_awaited_once_with("oauth-code")
 
@@ -301,7 +317,7 @@ async def test_first_oauth_channel_creates_workspace_and_destination(
         client_id,
     )
 
-    assert response.status_code == 303
+    assert response.status_code == 200
     assert await mongo_db["slack_workspace_installations"].count_documents({}) == 1
     assert await mongo_db["slack_destinations"].count_documents({}) == 1
 
@@ -354,7 +370,7 @@ async def test_second_channel_same_workspace_creates_destination_only(
         client, mongo_db, oauth_service, second, client_id
     )
 
-    assert second_response.status_code == 303
+    assert second_response.status_code == 200
     second_installation = await mongo_db[
         "slack_workspace_installations"
     ].find_one({})
@@ -406,7 +422,7 @@ async def test_reconnecting_same_channel_updates_and_reactivates_destination(
     response = await _connect(
         client, mongo_db, oauth_service, second, client_id
     )
-    assert response.status_code == 303
+    assert response.status_code == 200
     assert await mongo_db["slack_destinations"].count_documents({}) == 1
     updated = await mongo_db["slack_destinations"].find_one({})
     assert updated["_id"] == original["_id"]
@@ -449,7 +465,7 @@ async def test_different_workspace_creates_installation_and_destination(
         client_b_id,
     )
 
-    assert response.status_code == 303
+    assert response.status_code == 200
     assert await mongo_db["slack_workspace_installations"].count_documents({}) == 2
     assert await mongo_db["slack_destinations"].count_documents({}) == 2
 
@@ -485,10 +501,7 @@ async def test_different_clients_same_workspace_channel_do_not_overwrite(
         client, mongo_db, oauth_service, installation, client_b_id
     )
 
-    assert response.status_code == 303
-    assert parse_qs(urlparse(response.headers["location"]).query) == {
-        "reason": ["workspace_conflict"]
-    }
+    assert response.status_code == 409
     assert await mongo_db["slack_workspace_installations"].count_documents({}) == 1
     assert await mongo_db["slack_destinations"].count_documents({}) == 1
     client_a_channels = (
@@ -537,10 +550,7 @@ async def test_different_client_cannot_connect_another_clients_workspace_channel
         client_b_id,
     )
 
-    assert response.status_code == 303
-    assert parse_qs(urlparse(response.headers["location"]).query) == {
-        "reason": ["workspace_conflict"]
-    }
+    assert response.status_code == 409
     workspace = await mongo_db["slack_workspace_installations"].find_one({})
     assert str(workspace["client_id"]) == client_a_id
     assert await mongo_db["slack_destinations"].count_documents({}) == 1
@@ -588,7 +598,7 @@ async def test_legacy_null_workspace_is_backfilled_from_single_destination_owner
         client_id,
     )
 
-    assert response.status_code == 303
+    assert response.status_code == 200
     workspace = await mongo_db["slack_workspace_installations"].find_one({})
     assert str(workspace["client_id"]) == client_id
     assert await mongo_db["slack_destinations"].count_documents({}) == 2
@@ -642,10 +652,7 @@ async def test_legacy_workspace_with_multiple_destination_owners_is_rejected(
         client_a_id,
     )
 
-    assert response.status_code == 303
-    assert parse_qs(urlparse(response.headers["location"]).query) == {
-        "reason": ["workspace_conflict"]
-    }
+    assert response.status_code == 409
     workspace = await mongo_db["slack_workspace_installations"].find_one({})
     assert workspace["client_id"] is None
     assert await mongo_db["slack_destinations"].count_documents({}) == 2
@@ -817,7 +824,7 @@ async def test_oauth_state_is_persistent_single_use_and_replay_is_rejected(
     first = await _connect(
         client, mongo_db, oauth_service, installation, client_id
     )
-    assert first.status_code == 303
+    assert first.status_code == 200
     assert await mongo_db["slack_oauth_states"].count_documents({}) == 1
     state_record = await mongo_db["slack_oauth_states"].find_one({})
     assert state_record["used"] is True
@@ -831,10 +838,7 @@ async def test_oauth_state_is_persistent_single_use_and_replay_is_rejected(
         params={"code": "test-code", "state": state_record["state"]},
         follow_redirects=False,
     )
-    assert replay.status_code == 303
-    assert parse_qs(urlparse(replay.headers["location"]).query) == {
-        "reason": ["invalid_state"]
-    }
+    assert replay.status_code == 400
 
 
 async def test_tampered_oauth_state_is_rejected_before_code_exchange(
@@ -877,10 +881,7 @@ async def test_tampered_oauth_state_is_rejected_before_code_exchange(
         follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert parse_qs(urlparse(response.headers["location"]).query) == {
-        "reason": ["invalid_state"]
-    }
+    assert response.status_code == 400
     oauth_service.exchange_code.assert_not_awaited()
 
 
