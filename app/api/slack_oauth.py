@@ -209,8 +209,9 @@ def _oauth_error_response(
     pages = {
         "workspace_conflict": (
             "Slack Connection Failed",
-            "This Slack workspace is already connected to another "
-            "StratSync client. Please contact your StratSync administrator.",
+            "This Slack connection link is not valid for the selected "
+            "workspace. Please use the correct Slack Connect URL or contact "
+            "your StratSync administrator.",
             status.HTTP_409_CONFLICT,
         ),
         "oauth_denied": (

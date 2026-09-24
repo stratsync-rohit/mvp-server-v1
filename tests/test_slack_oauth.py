@@ -302,7 +302,15 @@ async def test_workspace_conflict_returns_clean_html_without_sensitive_values(
     assert response.status_code == 409
     assert response.headers["content-type"].startswith("text/html")
     assert "Slack Connection Failed" in response.text
-    assert "already connected to another StratSync client" in response.text
+    assert (
+        "This Slack connection link is not valid for the selected workspace."
+        in response.text
+    )
+    assert (
+        "Please use the correct Slack Connect URL or contact your StratSync administrator."
+        in response.text
+    )
+    assert "already connected to another StratSync client" not in response.text
     assert "location" not in response.headers
     for sensitive_value in (
         "oauth-code",
