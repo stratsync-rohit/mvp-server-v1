@@ -145,10 +145,32 @@ async def ensure_indexes(database: AsyncIOMotorDatabase) -> None:
             },
             name="uniq_slack_destination_workspace_channel",
         )
-        await database["slack_connection_tokens"].create_index(
-            [("token", ASCENDING)],
+        slack_token_collection = database["slack_connection_tokens"]
+        token_indexes = await slack_token_collection.index_information()
+        token_hash_index_name = "uniq_slack_connection_token"
+        existing_token_index = token_indexes.get(token_hash_index_name)
+        expected_token_hash_partial_filter = {
+            "token_hash": {"$exists": True}
+        }
+        if (
+            existing_token_index is not None
+            and (
+                existing_token_index.get("key") != [("token_hash", ASCENDING)]
+                or existing_token_index.get("partialFilterExpression")
+                != expected_token_hash_partial_filter
+            )
+        ):
+            # Replace the old plaintext-token index without touching records.
+            await slack_token_collection.drop_index(token_hash_index_name)
+        await slack_token_collection.create_index(
+            [("token_hash", ASCENDING)],
             unique=True,
-            name="uniq_slack_connection_token",
+            partialFilterExpression=expected_token_hash_partial_filter,
+            name=token_hash_index_name,
+        )
+        await slack_token_collection.create_index(
+            [("expires_at", ASCENDING)],
+            name="idx_slack_connection_token_expires_at",
         )
         await database["slack_connection_tokens"].create_index(
             [("client_id", ASCENDING)],

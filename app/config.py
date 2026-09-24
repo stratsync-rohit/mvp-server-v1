@@ -73,6 +73,10 @@ class Settings(BaseSettings):
         default=None,
         alias="SLACK_OAUTH_STATE_SECRET",
     )
+    slack_connection_token_encryption_key: str | None = Field(
+        default=None,
+        alias="SLACK_CONNECTION_TOKEN_ENCRYPTION_KEY",
+    )
 
     # --- CORS ---
     cors_origins: str = Field(

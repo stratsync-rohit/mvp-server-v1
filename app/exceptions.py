@@ -104,3 +104,15 @@ class SlackOAuthStateError(SlackOAuthError):
 
 class SlackOAuthStateConfigurationError(SlackOAuthError):
     status_code = 503
+
+
+class SlackConnectionTokenError(AppError):
+    """Safe errors for reusable Slack connection-token operations."""
+
+
+class SlackConnectionTokenConfigurationError(SlackConnectionTokenError):
+    status_code = 503
+
+
+class SlackConnectionTokenExpiredError(SlackConnectionTokenError):
+    status_code = 410

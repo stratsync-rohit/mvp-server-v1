@@ -5,6 +5,7 @@ from pymongo.errors import PyMongoError
 
 from app.database import get_database
 from app.dependencies import get_slack_connection_token_service
+from app.exceptions import SlackConnectionTokenError
 from app.repositories.client_repository import ClientRepository
 from app.schemas.client import (
     ClientCreate,
@@ -128,6 +129,8 @@ async def get_slack_connect_url(
 ):
     try:
         connection = await token_service.get_or_create_for_client(client_id)
+    except SlackConnectionTokenError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
@@ -139,7 +142,7 @@ async def get_slack_connect_url(
         ) from exc
 
     start_url = request.url_for("slack_oauth_start")
-    connect_url = f"{start_url}?{urlencode({'token': connection['token']})}"
+    connect_url = f"{start_url}?{urlencode({'token': connection['raw_token']})}"
     return {"success": True, "data": {"connect_url": connect_url}}
 
 

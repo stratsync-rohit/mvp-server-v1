@@ -132,6 +132,7 @@ call, so **no test ever sends a real Teams notification**.
 | `N8N_NOTIFICATION_WEBHOOK_URL` | **System-level**, single n8n webhook URL. NOT stored per client |
 | `N8N_REQUEST_TIMEOUT_SECONDS` | Timeout for the FastAPI → n8n HTTP call |
 | `CORS_ORIGINS` | Comma-separated list of allowed frontend origins |
+| `SLACK_CONNECTION_TOKEN_ENCRYPTION_KEY` | Required Fernet key used to encrypt reusable Slack Connect URL tokens; generate with `Fernet.generate_key()` and keep it in server-side secret configuration |
 
 ---
 

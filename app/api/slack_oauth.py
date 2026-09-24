@@ -12,6 +12,7 @@ from app.dependencies import (
 )
 from app.exceptions import (
     ConflictError,
+    SlackConnectionTokenError,
     SlackOAuthError,
 )
 from app.schemas.slack_workspace_installation import (
@@ -55,6 +56,11 @@ async def slack_oauth_start(
             connection_token_id=connection["_id"],
         )
         authorization_url = oauth_service.build_authorization_url(state)
+    except SlackConnectionTokenError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.message,
+        ) from exc
     except SlackOAuthError as exc:
         raise HTTPException(
             status_code=exc.status_code,

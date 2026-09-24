@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
@@ -11,9 +12,13 @@ from app.dependencies import (
     get_slack_oauth_state_service,
 )
 from app.main import app
+from app.exceptions import SlackConnectionTokenConfigurationError
 from app.repositories.client_repository import ClientRepository
 from app.repositories.slack_destination_repository import (
     SlackDestinationRepository,
+)
+from app.repositories.slack_connection_token_repository import (
+    SlackConnectionTokenRepository,
 )
 from app.repositories.slack_oauth_state_repository import (
     SlackOAuthStateRepository,
@@ -24,6 +29,7 @@ from app.schemas.slack_workspace_installation import (
 )
 from app.services.slack_oauth_service import SlackOAuthService
 from app.services.slack_oauth_state_service import SlackOAuthStateService
+from app.services.slack_connection_token_service import SlackConnectionTokenService
 
 
 pytestmark = pytest.mark.asyncio
@@ -491,6 +497,104 @@ async def test_connect_url_is_reusable_and_public_response_is_safe(
     assert "access_token" not in first.text
     assert "webhook" not in first.text.lower()
     assert await mongo_db["slack_connection_tokens"].count_documents({}) == 1
+    record = await mongo_db["slack_connection_tokens"].find_one({})
+    token = parse_qs(urlparse(first_url).query)["token"][0]
+    assert "token" not in record
+    assert record["token_hash"] == SlackConnectionTokenService.hash_token(token)
+    assert isinstance(record["token_ciphertext"], str)
+    assert record["expires_at"] - record["created_at"] == SlackConnectionTokenService.TOKEN_LIFETIME
+
+
+async def test_expired_connect_url_rotates_lazily_and_old_url_is_rejected(
+    client,
+    mongo_db,
+):
+    client_id = await _create_client(client, "Rotating Client")
+    first = await client.get(f"/api/clients/{client_id}/slack/connect-url")
+    first_url = first.json()["data"]["connect_url"]
+    first_token = parse_qs(urlparse(first_url).query)["token"][0]
+    await mongo_db["slack_connection_tokens"].update_one(
+        {},
+        {"$set": {"expires_at": datetime.now(timezone.utc)}},
+    )
+
+    expired_start = await client.get(
+        "/api/slack/oauth/start",
+        params={"token": first_token},
+        follow_redirects=False,
+    )
+    assert expired_start.status_code == 410
+    assert expired_start.json() == {
+        "detail": "This Slack connection link has expired. Please request a new link."
+    }
+
+    second = await client.get(f"/api/clients/{client_id}/slack/connect-url")
+    second_url = second.json()["data"]["connect_url"]
+    second_token = parse_qs(urlparse(second_url).query)["token"][0]
+    assert second_token != first_token
+    assert await mongo_db["slack_connection_tokens"].count_documents({}) == 2
+    assert (
+        await mongo_db["slack_connection_tokens"].count_documents(
+            {"client_id": ObjectId(client_id), "is_active": True}
+        )
+        == 1
+    )
+
+    old_start = await client.get(
+        "/api/slack/oauth/start",
+        params={"token": first_token},
+        follow_redirects=False,
+    )
+    assert old_start.status_code == 404
+
+
+async def test_invalid_token_encryption_configuration_fails_without_persisting(
+    client,
+    mongo_db,
+):
+    client_id = await _create_client(client, "Invalid Encryption Client")
+    settings = Settings.model_construct(
+        slack_connection_token_encryption_key="not-a-fernet-key",
+    )
+    service = SlackConnectionTokenService(
+        SlackConnectionTokenRepository(mongo_db),
+        ClientRepository(mongo_db),
+        settings=settings,
+    )
+
+    with pytest.raises(SlackConnectionTokenConfigurationError):
+        await service.get_or_create_for_client(client_id)
+    assert await mongo_db["slack_connection_tokens"].count_documents({}) == 0
+
+
+async def test_concurrent_rotation_keeps_one_active_token(
+    client,
+    mongo_db,
+):
+    client_id = await _create_client(client, "Concurrent Rotation Client")
+    first = await client.get(f"/api/clients/{client_id}/slack/connect-url")
+    assert first.status_code == 200
+    await mongo_db["slack_connection_tokens"].update_one(
+        {},
+        {"$set": {"expires_at": datetime.now(timezone.utc)}},
+    )
+
+    responses = await asyncio.gather(
+        *[
+            client.get(f"/api/clients/{client_id}/slack/connect-url")
+            for _ in range(8)
+        ]
+    )
+    assert all(response.status_code == 200 for response in responses)
+    urls = {response.json()["data"]["connect_url"] for response in responses}
+    assert len(urls) == 1
+    assert await mongo_db["slack_connection_tokens"].count_documents({}) == 2
+    assert (
+        await mongo_db["slack_connection_tokens"].count_documents(
+            {"client_id": ObjectId(client_id), "is_active": True}
+        )
+        == 1
+    )
 
 
 async def test_client_id_start_parameter_is_not_accepted(client):
@@ -601,7 +705,13 @@ async def test_oauth_indexes_exist(mongo_db):
 
     token_indexes = await mongo_db["slack_connection_tokens"].index_information()
     assert token_indexes["uniq_slack_connection_token"]["unique"] is True
+    assert token_indexes["uniq_slack_connection_token"]["key"] == [
+        ("token_hash", 1)
+    ]
     assert token_indexes["uniq_active_slack_connection_token_client"]["unique"] is True
+    assert token_indexes["idx_slack_connection_token_expires_at"]["key"] == [
+        ("expires_at", 1)
+    ]
 
     state_indexes = await mongo_db["slack_oauth_states"].index_information()
     assert state_indexes["uniq_slack_oauth_state"]["unique"] is True

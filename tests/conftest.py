@@ -5,12 +5,22 @@ Uses mongomock-motor to fully avoid touching a real MongoDB instance, and
 overrides the n8n service dependency with an AsyncMock so tests never make
 real HTTP calls out to n8n (and therefore never actually notify Teams).
 """
+import os
 from unittest.mock import AsyncMock
 
+from cryptography.fernet import Fernet
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from mongomock_motor import AsyncMongoMockClient
+
+
+# Tests use an ephemeral key; production configuration must provide its own
+# SLACK_CONNECTION_TOKEN_ENCRYPTION_KEY secret.
+os.environ.setdefault(
+    "SLACK_CONNECTION_TOKEN_ENCRYPTION_KEY",
+    Fernet.generate_key().decode("ascii"),
+)
 
 from app.database import ensure_indexes
 from app.dependencies import (

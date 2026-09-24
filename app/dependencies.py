@@ -264,8 +264,9 @@ def get_slack_connection_token_service(
         get_slack_connection_token_repository
     ),
     client_repository: ClientRepository = Depends(get_client_repository),
+    settings: Settings = Depends(get_settings),
 ) -> SlackConnectionTokenService:
-    return SlackConnectionTokenService(repository, client_repository)
+    return SlackConnectionTokenService(repository, client_repository, settings)
 
 
 def get_slack_oauth_state_service(
