@@ -1,8 +1,9 @@
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.errors import PyMongoError
 
+from app.config import get_settings
 from app.database import get_database
 from app.dependencies import get_slack_connection_token_service
 from app.exceptions import SlackConnectionTokenError
@@ -23,6 +24,7 @@ router = APIRouter(
     prefix="/api/clients",
     tags=["Clients"]
 )
+settings = get_settings()
 
 
 def _client_data(client):
@@ -122,7 +124,6 @@ async def get_clients(
 )
 async def get_slack_connect_url(
     client_id: str,
-    request: Request,
     token_service: SlackConnectionTokenService = Depends(
         get_slack_connection_token_service
     ),
@@ -141,8 +142,11 @@ async def get_slack_connect_url(
             detail="Unable to create Slack connect URL",
         ) from exc
 
-    start_url = request.url_for("slack_oauth_start")
-    connect_url = f"{start_url}?{urlencode({'token': connection['raw_token']})}"
+    connect_url = (
+        f"{settings.public_base_url.rstrip('/')}"
+        f"/api/slack/oauth/start?"
+        f"{urlencode({'token': connection['raw_token']})}"
+    )
     return {"success": True, "data": {"connect_url": connect_url}}
 
 

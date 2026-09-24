@@ -7,6 +7,7 @@ import pytest
 from bson import ObjectId
 
 from app.config import Settings
+from app.api import client as client_api
 from app.dependencies import (
     get_slack_oauth_service,
     get_slack_oauth_state_service,
@@ -503,6 +504,26 @@ async def test_connect_url_is_reusable_and_public_response_is_safe(
     assert record["token_hash"] == SlackConnectionTokenService.hash_token(token)
     assert isinstance(record["token_ciphertext"], str)
     assert record["expires_at"] - record["created_at"] == SlackConnectionTokenService.TOKEN_LIFETIME
+
+
+async def test_connect_url_uses_configured_public_base_url(
+    client,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        client_api.settings,
+        "public_base_url",
+        "https://34.100.226.192.nip.io",
+    )
+    client_id = await _create_client(client, "Configured Public URL Client")
+
+    response = await client.get(f"/api/clients/{client_id}/slack/connect-url")
+
+    assert response.status_code == 200
+    connect_url = response.json()["data"]["connect_url"]
+    assert connect_url.startswith(
+        "https://34.100.226.192.nip.io/api/slack/oauth/start?token="
+    )
 
 
 async def test_expired_connect_url_rotates_lazily_and_old_url_is_rejected(
