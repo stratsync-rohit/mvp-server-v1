@@ -1,9 +1,11 @@
 import logging
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from pymongo.errors import PyMongoError
 
+from app.config import Settings, get_settings
 from app.dependencies import (
     get_slack_connection_token_service,
     get_slack_oauth_service,
@@ -14,9 +16,9 @@ from app.exceptions import (
     ConflictError,
     SlackConnectionTokenError,
     SlackOAuthError,
-)
-from app.schemas.slack_workspace_installation import (
-    SlackOAuthCallbackResponse,
+    SlackOAuthConfigurationError,
+    SlackOAuthStateConfigurationError,
+    SlackOAuthStateError,
 )
 from app.services.slack_oauth_service import SlackOAuthService
 from app.services.slack_connection_token_service import SlackConnectionTokenService
@@ -32,6 +34,20 @@ router = APIRouter(
     prefix="/api/slack/oauth",
     tags=["Slack OAuth"],
 )
+
+
+def _oauth_error_redirect(
+    settings: Settings,
+    reason: str,
+) -> RedirectResponse:
+    separator = "&" if "?" in settings.slack_oauth_error_url else "?"
+    return RedirectResponse(
+        url=(
+            f"{settings.slack_oauth_error_url}"
+            f"{separator}{urlencode({'reason': reason})}"
+        ),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.get(
@@ -91,12 +107,12 @@ async def slack_oauth_start(
 
 @router.get(
     "/callback",
-    response_model=SlackOAuthCallbackResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=status.HTTP_303_SEE_OTHER,
 )
 async def slack_oauth_callback(
-    code: str = Query(..., min_length=1),
-    state: str = Query(..., min_length=1),
+    code: str | None = Query(None),
+    state: str | None = Query(None),
+    error: str | None = Query(None),
     oauth_service: SlackOAuthService = Depends(get_slack_oauth_service),
     state_service: SlackOAuthStateService = Depends(
         get_slack_oauth_state_service
@@ -104,10 +120,58 @@ async def slack_oauth_callback(
     installation_service: SlackWorkspaceInstallationService = Depends(
         get_slack_workspace_installation_service
     ),
+    settings: Settings = Depends(get_settings),
 ):
+    if error:
+        logger.info("slack_oauth_callback_denied")
+        return _oauth_error_redirect(settings, "oauth_denied")
+
+    if not state:
+        logger.warning("slack_oauth_callback_failed error_code=invalid_state")
+        return _oauth_error_redirect(settings, "invalid_state")
+
+    if not code:
+        logger.warning(
+            "slack_oauth_callback_failed error_code=oauth_exchange_failed"
+        )
+        return _oauth_error_redirect(settings, "oauth_exchange_failed")
+
     try:
         client_id = await state_service.validate_state(state)
+    except SlackOAuthStateError:
+        logger.warning("slack_oauth_callback_failed error_code=invalid_state")
+        return _oauth_error_redirect(settings, "invalid_state")
+    except SlackOAuthStateConfigurationError:
+        logger.error(
+            "slack_oauth_callback_failed error_code=configuration_error"
+        )
+        return _oauth_error_redirect(settings, "configuration_error")
+    except (LookupError, ValueError):
+        logger.warning("slack_oauth_callback_failed error_code=invalid_state")
+        return _oauth_error_redirect(settings, "invalid_state")
+    except Exception:
+        logger.error("slack_oauth_callback_failed error_code=unknown_error")
+        return _oauth_error_redirect(settings, "unknown_error")
+
+    try:
         installation = await oauth_service.exchange_code(code)
+    except SlackOAuthConfigurationError:
+        logger.error(
+            "slack_oauth_callback_failed error_code=configuration_error"
+        )
+        return _oauth_error_redirect(settings, "configuration_error")
+    except SlackOAuthError:
+        logger.error(
+            "slack_oauth_callback_failed error_code=oauth_exchange_failed"
+        )
+        return _oauth_error_redirect(settings, "oauth_exchange_failed")
+    except Exception:
+        logger.error(
+            "slack_oauth_callback_failed error_code=oauth_exchange_failed"
+        )
+        return _oauth_error_redirect(settings, "oauth_exchange_failed")
+
+    try:
         saved, destination = (
             await installation_service.save_installation_and_destination(
                 installation,
@@ -115,45 +179,32 @@ async def slack_oauth_callback(
             )
         )
         await state_service.mark_used(state)
-    except SlackOAuthError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail=exc.message,
-        ) from exc
-    except LookupError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except ConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=exc.message,
-        ) from exc
-    except FileExistsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-    except PyMongoError as exc:
+    except ConflictError:
+        logger.warning(
+            "slack_oauth_callback_failed error_code=workspace_conflict"
+        )
+        return _oauth_error_redirect(settings, "workspace_conflict")
+    except FileExistsError:
+        logger.warning(
+            "slack_oauth_callback_failed error_code=workspace_conflict"
+        )
+        return _oauth_error_redirect(settings, "workspace_conflict")
+    except SlackOAuthStateError:
+        logger.warning("slack_oauth_callback_failed error_code=invalid_state")
+        return _oauth_error_redirect(settings, "invalid_state")
+    except SlackOAuthStateConfigurationError:
+        logger.error(
+            "slack_oauth_callback_failed error_code=configuration_error"
+        )
+        return _oauth_error_redirect(settings, "configuration_error")
+    except PyMongoError:
         logger.exception("slack_oauth_installation_persist_failed")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to save Slack workspace installation",
-        ) from exc
-    except Exception as exc:
+        return _oauth_error_redirect(settings, "unknown_error")
+    except Exception:
         # Do not include the exception text: unexpected errors must not make
         # it possible for a secret-bearing value to reach application logs.
         logger.error("slack_oauth_callback_failed error_code=unexpected_error")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to complete Slack workspace connection",
-        ) from exc
+        return _oauth_error_redirect(settings, "unknown_error")
 
     logger.info(
         "slack_channel_connected workspace_id=%s installation_id=%s destination_id=%s",
@@ -162,22 +213,7 @@ async def slack_oauth_callback(
         destination["_id"] if destination else None,
     )
 
-    return {
-        "success": True,
-        "message": (
-            "Slack channel connected successfully"
-            if destination
-            else "Slack workspace connected successfully"
-        ),
-        "data": {
-            "installation_id": str(saved["_id"]),
-            "destination_id": (
-                str(destination["_id"]) if destination else None
-            ),
-            "workspace_id": saved["slack_team_id"],
-            "workspace_name": saved["slack_team_name"],
-            "channel_id": destination.get("channel_id") if destination else None,
-            "channel_name": destination.get("channel_name") if destination else None,
-            "is_active": destination["is_active"] if destination else saved["is_active"],
-        },
-    }
+    return RedirectResponse(
+        url=settings.slack_oauth_success_url,
+        status_code=status.HTTP_303_SEE_OTHER,
+    )

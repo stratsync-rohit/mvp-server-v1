@@ -103,6 +103,16 @@ class Settings(BaseSettings):
         alias="SLACK_OAUTH_SCOPES",
     )
 
+    slack_oauth_success_url: str = Field(
+        default="http://localhost:3000/integrations/slack/success",
+        alias="SLACK_OAUTH_SUCCESS_URL",
+    )
+
+    slack_oauth_error_url: str = Field(
+        default="http://localhost:3000/integrations/slack/error",
+        alias="SLACK_OAUTH_ERROR_URL",
+    )
+
     slack_oauth_state_secret: str | None = Field(
         default=None,
         alias="SLACK_OAUTH_STATE_SECRET",
