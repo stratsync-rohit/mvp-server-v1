@@ -12,7 +12,6 @@ pytestmark = pytest.mark.asyncio
 def canonical_risk_payload():
     return {
         "risk_id": "RSK-V22U-OZVV",
-        "card_id": "revenue-to-cover",
         "industry_slug": "distribution-trading",
         "industry_name": "Distribution & Trading",
         "title": "Potential To-Cover Risk Discovered",
@@ -111,7 +110,6 @@ async def risk_data(mongo_db):
     documents = [
         {
             "risk_id": "TEST-DIST-HIGH",
-            "card_id": "supplier-reliability",
             "industry_slug": "distribution-trading",
             "industry_name": "Distribution & Trading",
             "title": "Supplier reliability changed",
@@ -263,7 +261,6 @@ async def test_get_risk_by_business_id_preserves_complete_document(
     assert response.status_code == 200
     risk = response.json()["data"]
     assert risk["risk_id"] == "TEST-DIST-HIGH"
-    assert risk["card_id"] == "supplier-reliability"
     assert risk["metrics"][0]["value"] == "$84,000"
     assert risk["details"] == {"supplier": "Supplier A3"}
     assert risk["supplier_comparison"] == [{"supplier": "Supplier A1"}]
@@ -307,6 +304,26 @@ async def test_create_canonical_risk(client, mongo_db, canonical_risk_payload):
     ]
     assert [step["step"] for step in steps] == [1, 2]
     assert steps[0]["description"] == "Validate current stock and demand."
+
+
+async def test_create_risk_without_card_id_succeeds(
+    client, mongo_db, canonical_risk_payload
+):
+    assert "card_id" not in canonical_risk_payload
+
+    response = await client.post(
+        "/api/risks",
+        json=canonical_risk_payload,
+    )
+
+    assert response.status_code == 201
+
+    stored = await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    )
+
+    assert stored is not None
+    assert "card_id" not in stored
 
 
 async def test_create_accepts_canonical_step_without_inventing_description(

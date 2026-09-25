@@ -56,7 +56,6 @@ class RiskDestinationOverrideUpsert(BaseModel):
             "_id",
             "id",
             "risk_id",
-            "card_id",
             "created_at",
             "updated_at",
         }

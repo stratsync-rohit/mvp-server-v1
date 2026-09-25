@@ -343,9 +343,8 @@ support per-client, per-channel routing, make these changes in n8n:
 
 1. **Webhook trigger node** (`POST /webhook/rrm-alert-click`): no changes
    needed to the trigger itself — it already accepts a JSON body. FastAPI
-   now sends a richer payload (see above) alongside the existing
-   `card_id` / `destination` fields, so the same webhook node keeps
-   working.
+   sends the resolved risk and destination payload shown above, so the same
+   webhook node keeps working.
 2. **Teams HTTP Request node**: change the URL field from a static string
    to an expression that reads the webhook from the incoming payload:
    ```text
@@ -353,11 +352,9 @@ support per-client, per-channel routing, make these changes in n8n:
    ```
    (or `{{$json.body.teams_webhook_url}}` depending on how n8n normalizes
    the webhook body in your version).
-3. **Card-building node(s)**: no change to card-building logic — `card_id`
-   is passed exactly as before (`owner-funding-short`,
-   `dry-dock-budget`, `revenue-to-cover`, `supplier-reliability`, etc.).
-   Optionally, the new `teams_channel.team_name` / `channel_name` fields
-   can be used to personalize the card title/subtitle if desired.
+3. **Card-building node(s)**: build the Adaptive Card from the resolved
+   risk payload. Optionally, the `teams_channel.team_name` / `channel_name`
+   fields can be used to personalize the card title/subtitle.
 4. **Integration test branch** (new, optional): if you want a distinct
    card for `event_type == "integration_test"` payloads sent by
    `POST /api/teams/channels/{id}/test`, add an `IF` node checking

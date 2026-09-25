@@ -212,7 +212,6 @@ class RiskCreate(CanonicalRiskModel):
     # --------------------------------------------------------
 
     risk_id: str
-    card_id: str
 
     industry_slug: str
     industry_name: str
@@ -263,16 +262,6 @@ class RiskCreate(CanonicalRiskModel):
 
         if not value:
             raise ValueError("risk_id must not be blank")
-
-        return value
-
-    @field_validator("card_id")
-    @classmethod
-    def validate_card_id(cls, value: str) -> str:
-        value = value.strip()
-
-        if not value:
-            raise ValueError("card_id must not be blank")
 
         return value
 
