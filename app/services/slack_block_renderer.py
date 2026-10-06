@@ -86,6 +86,46 @@ def _heading(title: Any) -> dict[str, Any] | None:
     }
 
 
+def _render_associated_risks(
+    risk: dict[str, Any],
+) -> list[dict[str, Any]]:
+    associated_risk_ids: list[str] = []
+    seen: set[str] = set()
+
+    for value in _safe_list(risk.get("associated_risk_ids")):
+        if not isinstance(value, str):
+            continue
+
+        risk_id = value.strip()
+
+        if not risk_id or risk_id in seen:
+            continue
+
+        associated_risk_ids.append(risk_id)
+        seen.add(risk_id)
+
+    if not associated_risk_ids:
+        return []
+
+    heading = _heading("Associated Risks")
+
+    if heading is None:
+        return []
+
+    ids_text = "\n".join(
+        f"• {_escape_mrkdwn(risk_id)}"
+        for risk_id in associated_risk_ids
+    )
+
+    return [
+        heading,
+        {
+            "type": "section",
+            "text": _mrkdwn(ids_text),
+        },
+    ]
+
+
 def _divider() -> dict[str, str]:
     return {
         "type": "divider",
@@ -918,6 +958,10 @@ def _build_v2_notification(
         rendered_notification
     )
 
+    blocks.extend(
+        _render_associated_risks(risk)
+    )
+
     blocks.append(
         _divider()
     )
@@ -1194,6 +1238,10 @@ def build_slack_notification_payload(
                 }
             )
         )
+
+    blocks.extend(
+        _render_associated_risks(risk)
+    )
 
     blocks.append(
         _divider()

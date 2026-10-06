@@ -4,6 +4,7 @@ import pytest
 import pytest_asyncio
 from bson import ObjectId
 
+from app.repositories.risk_repository import RiskRepository
 
 pytestmark = pytest.mark.asyncio
 
@@ -292,6 +293,7 @@ async def test_create_canonical_risk(client, mongo_db, canonical_risk_payload):
     assert isinstance(stored["created_at"], datetime)
     assert isinstance(stored["updated_at"], datetime)
     assert stored["created_at"] == stored["updated_at"]
+    assert stored["associated_risk_ids"] == []
     assert stored["sender"]["risk_id"] == stored["risk_id"]
     assert stored["entity"] == canonical_risk_payload["entity"]
     assert stored["sender"]["source"] == "Potential To-Cover Alert"
@@ -324,6 +326,154 @@ async def test_create_risk_without_card_id_succeeds(
 
     assert stored is not None
     assert "card_id" not in stored
+
+
+async def test_create_normalizes_and_validates_associated_risk_ids(
+    client, mongo_db, canonical_risk_payload
+):
+    await mongo_db["risks"].insert_many([
+        {"risk_id": "RSK-ASSOC-0001", "is_active": False},
+        {"risk_id": "RSK-ASSOC-0002", "is_active": True},
+    ])
+    canonical_risk_payload["associated_risk_ids"] = [
+        " RSK-ASSOC-0001 ",
+        "",
+        "RSK-ASSOC-0002",
+        "RSK-ASSOC-0001",
+        "   ",
+    ]
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 201
+    stored = await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    )
+    assert stored["associated_risk_ids"] == [
+        "RSK-ASSOC-0001",
+        "RSK-ASSOC-0002",
+    ]
+
+
+async def test_create_rejects_unknown_associated_risk_ids(
+    client, mongo_db, canonical_risk_payload
+):
+    canonical_risk_payload["associated_risk_ids"] = [
+        "RSK-MISSING-0001",
+        "RSK-MISSING-0002",
+    ]
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "Associated risks not found: "
+        "RSK-MISSING-0001, RSK-MISSING-0002"
+    )
+    assert await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    ) is None
+
+
+async def test_create_rejects_associated_risk_self_reference(
+    client, canonical_risk_payload
+):
+    canonical_risk_payload["associated_risk_ids"] = [
+        f" {canonical_risk_payload['risk_id']} "
+    ]
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 422
+
+
+async def test_update_replaces_and_clears_associated_risk_ids(
+    client, mongo_db, canonical_risk_payload
+):
+    await mongo_db["risks"].insert_many([
+        {"risk_id": "RSK-ASSOC-0001", "is_active": True},
+        {"risk_id": "RSK-ASSOC-0002", "is_active": True},
+    ])
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    risk_id = canonical_risk_payload["risk_id"]
+
+    canonical_risk_payload["associated_risk_ids"] = ["RSK-ASSOC-0001"]
+    replaced = await client.put(
+        f"/api/risks/{risk_id}",
+        json=canonical_risk_payload,
+    )
+    assert replaced.status_code == 200
+
+    stored = await mongo_db["risks"].find_one({"risk_id": risk_id})
+    assert stored["associated_risk_ids"] == ["RSK-ASSOC-0001"]
+
+    canonical_risk_payload["associated_risk_ids"] = []
+    cleared = await client.put(
+        f"/api/risks/{risk_id}",
+        json=canonical_risk_payload,
+    )
+    assert cleared.status_code == 200
+
+    stored = await mongo_db["risks"].find_one({"risk_id": risk_id})
+    assert stored["associated_risk_ids"] == []
+
+
+async def test_risk_repository_bulk_lookup_returns_all_requested_ids(mongo_db):
+    await mongo_db["risks"].insert_many([
+        {"risk_id": "RSK-BULK-0001"},
+        {"risk_id": "RSK-BULK-0002"},
+        {"risk_id": "RSK-BULK-OTHER"},
+    ])
+
+    risks = await RiskRepository(mongo_db).get_risks_by_risk_ids([
+        "RSK-BULK-0002",
+        "RSK-BULK-0001",
+    ])
+
+    assert {risk["risk_id"] for risk in risks} == {
+        "RSK-BULK-0001",
+        "RSK-BULK-0002",
+    }
+
+
+async def test_risk_repository_reverse_lookup_returns_only_referencing_risks(
+    mongo_db,
+):
+    await mongo_db["risks"].insert_many([
+        {
+            "risk_id": "RSK-REVERSE-A",
+            "associated_risk_ids": ["RSK-REVERSE-TARGET"],
+        },
+        {
+            "risk_id": "RSK-REVERSE-B",
+            "associated_risk_ids": ["RSK-REVERSE-OTHER"],
+        },
+        {
+            "risk_id": "RSK-REVERSE-C",
+            "associated_risk_ids": ["RSK-REVERSE-TARGET", "RSK-REVERSE-X"],
+        },
+    ])
+
+    risks = await RiskRepository(mongo_db).get_risks_referencing_risk_id(
+        "RSK-REVERSE-TARGET"
+    )
+
+    assert {risk["risk_id"] for risk in risks} == {
+        "RSK-REVERSE-A",
+        "RSK-REVERSE-C",
+    }
+    assert all(set(risk) == {"_id", "risk_id"} for risk in risks)
+
+
+async def test_risk_repository_reverse_lookup_returns_empty_for_no_match(
+    mongo_db,
+):
+    risks = await RiskRepository(mongo_db).get_risks_referencing_risk_id(
+        "RSK-REVERSE-MISSING"
+    )
+
+    assert risks == []
 
 
 async def test_create_accepts_canonical_step_without_inventing_description(

@@ -2,6 +2,9 @@ from app.services.teams_card_renderer import (
     _render_generic_block,
     build_teams_notification_payload,
 )
+from app.services.slack_block_renderer import (
+    build_slack_notification_payload,
+)
 
 
 def test_generic_v2_dispatcher_supports_all_block_types():
@@ -81,3 +84,73 @@ def test_generic_v2_callout_is_a_direct_text_block_in_order():
         {"title": "Owner", "value": "Finance"}
     ]
     assert card["msteams"] == {"width": "Full"}
+
+
+def test_associated_risks_render_as_ids_in_teams_v1_and_v2():
+    for risk in [
+        {
+            "title": "V1 Risk",
+            "severity": "high",
+            "associated_risk_ids": [
+                " RSK-AAAA-1111 ",
+                "",
+                {"risk_id": "RSK-SHOULD-NOT-RENDER"},
+                "RSK-BBBB-2222",
+            ],
+        },
+        {
+            "schema_version": 2,
+            "title": "V2 Risk",
+            "severity_label": "High",
+            "views": {"notification": {"blocks": []}},
+            "associated_risk_ids": [
+                "RSK-AAAA-1111",
+                "RSK-BBBB-2222",
+            ],
+        },
+    ]:
+        card = build_teams_notification_payload(risk)["attachments"][0][
+            "content"
+        ]
+        rendered = [element.get("text", "") for element in card["body"]]
+
+        assert "ASSOCIATED RISKS" in rendered
+        assert "• RSK-AAAA-1111" in rendered
+        assert "• RSK-BBBB-2222" in rendered
+        assert "RSK-SHOULD-NOT-RENDER" not in str(card)
+
+
+def test_associated_risks_are_omitted_when_missing_or_empty():
+    for risk in [
+        {"title": "No associations", "severity": "low"},
+        {
+            "schema_version": 2,
+            "views": {"notification": {"blocks": []}},
+            "associated_risk_ids": [],
+        },
+    ]:
+        teams_card = build_teams_notification_payload(risk)
+        assert "ASSOCIATED RISKS" not in str(teams_card)
+
+        slack_payload = build_slack_notification_payload(risk)
+        assert "ASSOCIATED RISKS" not in str(slack_payload)
+
+
+def test_associated_risks_render_as_escaped_ids_in_slack_v1_and_v2():
+    for risk in [
+        {
+            "title": "V1 Risk",
+            "severity": "high",
+            "associated_risk_ids": ["RSK-<AAAA>-1111"],
+        },
+        {
+            "schema_version": 2,
+            "title": "V2 Risk",
+            "severity_label": "High",
+            "views": {"notification": {"blocks": []}},
+            "associated_risk_ids": ["RSK-<AAAA>-1111"],
+        },
+    ]:
+        payload = build_slack_notification_payload(risk)
+        assert "*ASSOCIATED RISKS*" in str(payload)
+        assert "RSK-&lt;AAAA&gt;-1111" in str(payload)

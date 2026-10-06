@@ -80,6 +80,14 @@ class RiskService:
             document["risk_id"],
         )
 
+        # Persist the default for new documents while retaining the
+        # existing partial-update behavior for omitted update fields.
+        document.setdefault("associated_risk_ids", [])
+
+        await self._validate_associated_risk_ids(
+            document.get("associated_risk_ids", [])
+        )
+
         existing = await self.risk_repository.get_risk_by_risk_id(
             document["risk_id"]
         )
@@ -138,6 +146,11 @@ class RiskService:
             risk_id,
         )
 
+        if "associated_risk_ids" in document:
+            await self._validate_associated_risk_ids(
+                document["associated_risk_ids"]
+            )
+
         document["updated_at"] = datetime.now(
             timezone.utc
         )
@@ -159,6 +172,37 @@ class RiskService:
 
         if not deleted:
             raise NotFoundError("Risk not found")
+
+    async def _validate_associated_risk_ids(
+        self,
+        associated_risk_ids: list[str],
+    ) -> None:
+        if not associated_risk_ids:
+            return
+
+        associated_risks = (
+            await self.risk_repository.get_risks_by_risk_ids(
+                associated_risk_ids
+            )
+        )
+
+        existing_ids = {
+            risk.get("risk_id")
+            for risk in associated_risks
+            if isinstance(risk, dict)
+        }
+
+        missing_ids = [
+            risk_id
+            for risk_id in associated_risk_ids
+            if risk_id not in existing_ids
+        ]
+
+        if missing_ids:
+            raise ValidationAppError(
+                "Associated risks not found: "
+                + ", ".join(missing_ids)
+            )
 
     # ========================================================
     # NORMALIZATION

@@ -213,6 +213,10 @@ class RiskCreate(CanonicalRiskModel):
 
     risk_id: str
 
+    associated_risk_ids: list[str] = Field(
+        default_factory=list
+    )
+
     industry_slug: str
     industry_name: str
 
@@ -264,6 +268,26 @@ class RiskCreate(CanonicalRiskModel):
             raise ValueError("risk_id must not be blank")
 
         return value
+
+    @field_validator("associated_risk_ids")
+    @classmethod
+    def normalize_associated_risk_ids(
+        cls,
+        value: list[str],
+    ) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+
+        for risk_id in value:
+            risk_id = risk_id.strip()
+
+            if not risk_id or risk_id in seen:
+                continue
+
+            normalized.append(risk_id)
+            seen.add(risk_id)
+
+        return normalized
 
     @field_validator("industry_slug")
     @classmethod
@@ -331,6 +355,15 @@ class RiskCreate(CanonicalRiskModel):
         raise ValueError(
             f"Unsupported schema_version: {self.schema_version}"
         )
+
+    @model_validator(mode="after")
+    def validate_associated_risk_ids(self):
+        if self.risk_id in self.associated_risk_ids:
+            raise ValueError(
+                "associated_risk_ids cannot contain the current risk_id"
+            )
+
+        return self
 
 
 # ============================================================

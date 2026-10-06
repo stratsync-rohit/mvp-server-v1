@@ -42,6 +42,44 @@ class RiskRepository:
     async def get_risk_by_risk_id(self, risk_id: str):
         return await self.get_risk_by_id(risk_id)
 
+    async def get_risks_by_risk_ids(
+        self,
+        risk_ids: list[str],
+    ):
+        if not risk_ids:
+            return []
+
+        risks = []
+        cursor = self.collection.find({
+            "risk_id": {
+                "$in": risk_ids,
+            }
+        })
+
+        async for risk in cursor:
+            risks.append(risk)
+
+        return risks
+
+    async def get_risks_referencing_risk_id(
+        self,
+        risk_id: str,
+    ):
+        risks = []
+        cursor = self.collection.find(
+            {
+                "associated_risk_ids": risk_id,
+            },
+            {
+                "risk_id": 1,
+            },
+        )
+
+        async for risk in cursor:
+            risks.append(risk)
+
+        return risks
+
     async def create_risk(self, document: dict):
         result = await self.collection.insert_one(document)
         document["_id"] = result.inserted_id

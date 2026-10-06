@@ -209,6 +209,49 @@ def _section_heading(
     }
 
 
+def _render_associated_risks(
+    risk: dict[str, Any],
+) -> list[dict[str, Any]]:
+    associated_risk_ids: list[str] = []
+    seen: set[str] = set()
+
+    for value in _safe_list(risk.get("associated_risk_ids")):
+        if not isinstance(value, str):
+            continue
+
+        risk_id = value.strip()
+
+        if not risk_id or risk_id in seen:
+            continue
+
+        associated_risk_ids.append(risk_id)
+        seen.add(risk_id)
+
+    if not associated_risk_ids:
+        return []
+
+    heading = _section_heading(
+        "Associated Risks",
+        spacing="Medium",
+    )
+
+    if heading is None:
+        return []
+
+    return [
+        heading,
+        *[
+            {
+                "type": "TextBlock",
+                "text": f"• {risk_id}",
+                "wrap": True,
+                "spacing": "Small",
+            }
+            for risk_id in associated_risk_ids
+        ],
+    ]
+
+
 
 
 
@@ -2810,6 +2853,13 @@ def _build_v2_card(
     )
 
 
+    card_body.extend(
+
+        _render_associated_risks(risk)
+
+    )
+
+
 
     card_body.append(
 
@@ -3174,6 +3224,13 @@ def _build_v1_card(
         )
 
 
+    card_body.extend(
+
+        _render_associated_risks(risk)
+
+    )
+
+
 
     card_body.append(
 
@@ -3378,8 +3435,6 @@ def build_teams_notification_payload(
         ],
 
     }
-
-
 
 
 

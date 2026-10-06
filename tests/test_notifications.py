@@ -11,6 +11,7 @@ from app.exceptions import (
     UpstreamError,
     UpstreamTimeoutError
 )
+from app.services.notification_service import NotificationService
 
 
 pytestmark = pytest.mark.asyncio
@@ -64,6 +65,90 @@ async def _trigger(client, destination_id: str, risk_id="RSK-21132-0472"):
         "/api/notifications/trigger",
         json={"risk_id": risk_id, "destination_id": destination_id}
     )
+
+
+def _notification_service_for_associated_risk_resolution(
+    reverse_risks,
+):
+    service = NotificationService.__new__(NotificationService)
+    service.risk_repository = AsyncMock()
+    service.risk_repository.get_risks_referencing_risk_id = AsyncMock(
+        return_value=reverse_risks
+    )
+    return service
+
+
+async def test_notification_associated_risk_resolution_is_symmetric_and_non_transitive():
+    service = _notification_service_for_associated_risk_resolution([
+        {"risk_id": "RSK-A"},
+    ])
+
+    assert await service._resolve_associated_risk_ids(
+        {"associated_risk_ids": []},
+        "RSK-B",
+    ) == ["RSK-A"]
+
+    service.risk_repository.get_risks_referencing_risk_id.return_value = [
+        {"risk_id": "RSK-A"},
+        {"risk_id": "RSK-C"},
+    ]
+    assert await service._resolve_associated_risk_ids(
+        {"associated_risk_ids": ["RSK-C", "RSK-B"]},
+        "RSK-B",
+    ) == ["RSK-C", "RSK-A"]
+
+    service.risk_repository.get_risks_referencing_risk_id.return_value = []
+    assert await service._resolve_associated_risk_ids(
+        {"associated_risk_ids": ["RSK-B"]},
+        "RSK-A",
+    ) == ["RSK-B"]
+    service.risk_repository.get_risks_referencing_risk_id.assert_awaited_with(
+        "RSK-A"
+    )
+
+
+async def test_notification_associated_risk_override_replaces_direct_ids():
+    service = _notification_service_for_associated_risk_resolution([
+        {"risk_id": "RSK-REVERSE"},
+    ])
+
+    assert await service._resolve_associated_risk_ids(
+        {"associated_risk_ids": ["RSK-OVERRIDE"]},
+        "RSK-A",
+    ) == ["RSK-OVERRIDE", "RSK-REVERSE"]
+
+
+async def test_notification_associated_risk_resolution_preserves_order_and_deduplicates():
+    service = _notification_service_for_associated_risk_resolution([
+        {"risk_id": "RSK-B"},
+        {"risk_id": "RSK-C"},
+        {"risk_id": "RSK-B"},
+        {"risk_id": "RSK-A"},
+    ])
+
+    assert await service._resolve_associated_risk_ids(
+        {
+            "associated_risk_ids": [
+                " RSK-A ",
+                "",
+                "RSK-B",
+                123,
+            ]
+        },
+        "RSK-CURRENT",
+    ) == ["RSK-A", "RSK-B", "RSK-C"]
+
+
+async def test_notification_associated_risk_resolution_excludes_self_id():
+    service = _notification_service_for_associated_risk_resolution([
+        {"risk_id": "RSK-CURRENT"},
+        {"risk_id": "RSK-OTHER"},
+    ])
+
+    assert await service._resolve_associated_risk_ids(
+        {"associated_risk_ids": ["RSK-CURRENT", "RSK-DIRECT"]},
+        "RSK-CURRENT",
+    ) == ["RSK-DIRECT", "RSK-OTHER"]
 
 
 async def test_notification_trigger_success_and_history_created(

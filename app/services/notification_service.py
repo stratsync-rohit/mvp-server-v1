@@ -155,6 +155,13 @@ class NotificationService:
             )
         )
 
+        effective_associated_risk_ids = (
+            await self._resolve_associated_risk_ids(
+                risk=risk,
+                canonical_risk_id=risk_id,
+            )
+        )
+
         # =========================================================
         # LOAD CLIENT
         # =========================================================
@@ -272,6 +279,10 @@ class NotificationService:
             "id",
             None,
         )
+
+        risk_payload[
+            "associated_risk_ids"
+        ] = effective_associated_risk_ids
 
         risk_payload = (
             normalize_mitigation_plan_for_notification(
@@ -411,6 +422,76 @@ class NotificationService:
                 sent_notification["sent_at"]
             ),
         }
+
+    async def _resolve_associated_risk_ids(
+        self,
+        risk: dict,
+        canonical_risk_id: str,
+    ) -> list[str]:
+        direct_ids = self._normalize_associated_risk_ids(
+            risk.get("associated_risk_ids"),
+            canonical_risk_id,
+        )
+
+        referencing_risks = (
+            await self.risk_repository
+            .get_risks_referencing_risk_id(
+                canonical_risk_id
+            )
+        )
+
+        reverse_ids = self._normalize_associated_risk_ids(
+            [
+                referencing_risk.get("risk_id")
+                for referencing_risk in referencing_risks
+                if isinstance(referencing_risk, dict)
+            ],
+            canonical_risk_id,
+        )
+
+        merged_ids: list[str] = []
+        seen: set[str] = set()
+
+        for associated_risk_id in [
+            *direct_ids,
+            *reverse_ids,
+        ]:
+            if associated_risk_id in seen:
+                continue
+
+            merged_ids.append(associated_risk_id)
+            seen.add(associated_risk_id)
+
+        return merged_ids
+
+    @staticmethod
+    def _normalize_associated_risk_ids(
+        values,
+        canonical_risk_id: str,
+    ) -> list[str]:
+        if not isinstance(values, list):
+            return []
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+
+        for value in values:
+            if not isinstance(value, str):
+                continue
+
+            associated_risk_id = value.strip()
+
+            if (
+                not associated_risk_id
+                or associated_risk_id == canonical_risk_id
+                or associated_risk_id in seen
+            ):
+                continue
+
+            normalized.append(associated_risk_id)
+            seen.add(associated_risk_id)
+
+        return normalized
 
     async def get_notifications(
         self,
