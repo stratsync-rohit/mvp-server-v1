@@ -86,44 +86,79 @@ def _heading(title: Any) -> dict[str, Any] | None:
     }
 
 
-def _render_associated_risks(
+def _connected_risk_overview_rows(
     risk: dict[str, Any],
-) -> list[dict[str, Any]]:
-    associated_risk_ids: list[str] = []
-    seen: set[str] = set()
+) -> list[dict[str, str]]:
+    rows: Any = None
+    has_presentation_rows = False
+    for key in (
+        "connected_risk_overview",
+        "associated_risk_overview",
+        "associated_risks",
+    ):
+        if key in risk:
+            rows = risk.get(key)
+            has_presentation_rows = True
+            break
 
-    for value in _safe_list(risk.get("associated_risk_ids")):
-        if not isinstance(value, str):
-            continue
-
-        risk_id = value.strip()
-
-        if not risk_id or risk_id in seen:
-            continue
-
-        associated_risk_ids.append(risk_id)
-        seen.add(risk_id)
-
-    if not associated_risk_ids:
-        return []
-
-    heading = _heading("Associated Risks")
-
-    if heading is None:
-        return []
-
-    ids_text = "\n".join(
-        f"• {_escape_mrkdwn(risk_id)}"
-        for risk_id in associated_risk_ids
-    )
+    if has_presentation_rows:
+        if not isinstance(rows, list):
+            return []
+        return [
+            {
+                "risk_id": _safe_text(row.get("risk_id"), "—"),
+                "risk": _safe_text(row.get("risk"), "—"),
+                "severity": _safe_text(row.get("severity"), "—"),
+                "primary_exposure": _safe_text(
+                    row.get("primary_exposure"),
+                    "-",
+                ),
+            }
+            for row in rows
+            if isinstance(row, dict)
+        ]
 
     return [
-        heading,
         {
-            "type": "section",
-            "text": _mrkdwn(ids_text),
-        },
+            "risk_id": risk_id,
+            "risk": "—",
+            "severity": "—",
+            "primary_exposure": "-",
+        }
+        for risk_id in dict.fromkeys(
+            value.strip()
+            for value in _safe_list(risk.get("associated_risk_ids"))
+            if (
+                isinstance(value, str)
+                and value.strip()
+                and value.strip() != _safe_text(risk.get("risk_id"))
+            )
+        )
     ]
+
+
+def _render_connected_risk_overview(
+    risk: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows = _connected_risk_overview_rows(risk)
+    if not rows:
+        return []
+
+    return _render_table_block(
+        {
+            "title": "Connected Risk Overview",
+            "columns": [
+                {"key": "risk_id", "label": "Risk ID"},
+                {"key": "risk", "label": "Risk"},
+                {"key": "severity", "label": "Severity"},
+                {
+                    "key": "primary_exposure",
+                    "label": "Primary Exposure",
+                },
+            ],
+            "rows": rows,
+        }
+    )
 
 
 def _divider() -> dict[str, str]:
@@ -451,7 +486,7 @@ def _table_cell(
 
     return {
         "type": "raw_text",
-        "text": text,
+        "text": _truncate(text, MAX_FIELD_TEXT),
     }
 
 
@@ -959,7 +994,7 @@ def _build_v2_notification(
     )
 
     blocks.extend(
-        _render_associated_risks(risk)
+        _render_connected_risk_overview(risk)
     )
 
     blocks.append(
@@ -1240,7 +1275,7 @@ def build_slack_notification_payload(
         )
 
     blocks.extend(
-        _render_associated_risks(risk)
+        _render_connected_risk_overview(risk)
     )
 
     blocks.append(

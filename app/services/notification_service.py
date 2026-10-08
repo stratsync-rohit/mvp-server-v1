@@ -25,6 +25,10 @@ from app.services.slack_webhook_service import (
     SlackWebhookService,
 )
 
+from app.services.connected_risk_overview import (
+    build_connected_risk_overview_rows,
+)
+
 from app.utils.mongo_serializer import (
     serialize_mongo_document,
 )
@@ -283,6 +287,22 @@ class NotificationService:
         risk_payload[
             "associated_risk_ids"
         ] = effective_associated_risk_ids
+
+        associated_risk_documents = []
+        if effective_associated_risk_ids:
+            associated_risk_documents = (
+                await self.risk_repository.get_risks_by_risk_ids(
+                    effective_associated_risk_ids
+                )
+            )
+
+        risk_payload[
+            "connected_risk_overview"
+        ] = build_connected_risk_overview_rows(
+            effective_associated_risk_ids,
+            associated_risk_documents,
+            canonical_risk_id=risk_id,
+        )
 
         risk_payload = (
             normalize_mitigation_plan_for_notification(

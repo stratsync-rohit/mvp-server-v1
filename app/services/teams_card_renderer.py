@@ -7,7 +7,6 @@ from typing import Any
 
 
 
-
 # ============================================================
 
 # COMMON HELPERS
@@ -209,47 +208,91 @@ def _section_heading(
     }
 
 
-def _render_associated_risks(
+def _connected_risk_overview_rows(
+    risk: dict[str, Any],
+) -> list[dict[str, str]]:
+    rows: Any = None
+    has_presentation_rows = False
+    for key in (
+        "connected_risk_overview",
+        "associated_risk_overview",
+        "associated_risks",
+    ):
+        if key in risk:
+            rows = risk.get(key)
+            has_presentation_rows = True
+            break
+
+    if has_presentation_rows:
+        if not isinstance(rows, list):
+            return []
+        return [
+            {
+                "risk_id": _safe_text(row.get("risk_id"), "—"),
+                "risk": _safe_text(row.get("risk"), "—"),
+                "severity": _safe_text(row.get("severity"), "—"),
+                "primary_exposure": _safe_text(
+                    row.get("primary_exposure"),
+                    "-",
+                ),
+            }
+            for row in rows
+            if isinstance(row, dict)
+        ]
+
+    # Renderer-level fallback keeps direct renderer callers compatible. The
+    # notification service normally supplies fully mapped rows above.
+    return [
+        {
+            "risk_id": risk_id,
+            "risk": "—",
+            "severity": "—",
+            "primary_exposure": "-",
+        }
+        for risk_id in dict.fromkeys(
+            value.strip()
+            for value in _safe_list(risk.get("associated_risk_ids"))
+            if (
+                isinstance(value, str)
+                and value.strip()
+                and value.strip() != _safe_text(risk.get("risk_id"))
+            )
+        )
+    ]
+
+
+def _build_connected_risk_table(
+    rows: list[dict[str, str]],
+) -> dict[str, Any] | None:
+    if not rows:
+        return None
+
+    return {
+        "type": "table",
+        "title": "Connected Risk Overview",
+        "columns": [
+            {"key": "risk_id", "label": "Risk ID"},
+            {"key": "risk", "label": "Risk"},
+            {"key": "severity", "label": "Severity"},
+            {
+                "key": "primary_exposure",
+                "label": "Primary Exposure",
+            },
+        ],
+        "rows": rows,
+    }
+
+
+def _render_connected_risk_overview(
     risk: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    associated_risk_ids: list[str] = []
-    seen: set[str] = set()
-
-    for value in _safe_list(risk.get("associated_risk_ids")):
-        if not isinstance(value, str):
-            continue
-
-        risk_id = value.strip()
-
-        if not risk_id or risk_id in seen:
-            continue
-
-        associated_risk_ids.append(risk_id)
-        seen.add(risk_id)
-
-    if not associated_risk_ids:
-        return []
-
-    heading = _section_heading(
-        "Associated Risks",
-        spacing="Medium",
+    connected_risk_table = _build_connected_risk_table(
+        _connected_risk_overview_rows(risk)
     )
-
-    if heading is None:
+    if connected_risk_table is None:
         return []
 
-    return [
-        heading,
-        *[
-            {
-                "type": "TextBlock",
-                "text": f"• {risk_id}",
-                "wrap": True,
-                "spacing": "Small",
-            }
-            for risk_id in associated_risk_ids
-        ],
-    ]
+    return _render_table_block(connected_risk_table)
 
 
 
@@ -2855,7 +2898,7 @@ def _build_v2_card(
 
     card_body.extend(
 
-        _render_associated_risks(risk)
+        _render_connected_risk_overview(risk)
 
     )
 
@@ -3226,7 +3269,7 @@ def _build_v1_card(
 
     card_body.extend(
 
-        _render_associated_risks(risk)
+        _render_connected_risk_overview(risk)
 
     )
 
@@ -3435,8 +3478,3 @@ def build_teams_notification_payload(
         ],
 
     }
-
-
-
-
-
