@@ -218,21 +218,9 @@ def _render_callout_block(
     if not title and not text:
         return []
 
-    status = _safe_text(block.get("status")).lower()
-    if status in {"critical", "high", "danger", "error", "failed"}:
-        symbol = "🚨"
-    elif status in {"warning", "warn", "medium", "pending"}:
-        symbol = "⚠️"
-    elif status in {"success", "good", "low", "healthy", "ok"}:
-        symbol = "✅"
-    elif status in {"info", "accent"}:
-        symbol = "ℹ️"
-    else:
-        symbol = "⚠️"
-
     lines: list[str] = []
     if title:
-        lines.append(f"{symbol} *{_escape_mrkdwn(title.upper())}*")
+        lines.append(f"*{_escape_mrkdwn(title.upper())}*")
     if text:
         # A Slack mrkdwn block quote provides visual differentiation without
         # relying on unsupported Container styles or HTML/CSS.
@@ -318,17 +306,10 @@ def _render_metrics_block(
         if not label:
             continue
         value = _safe_text(metric.get("value"), "-")
-        status = _safe_text(metric.get("status")).lower()
-        indicator = (
-            "🔴 " if status in {"critical", "high", "danger", "error"}
-            else "🟠 " if status in {"medium", "warning", "warn", "pending"}
-            else "🟢 " if status in {"low", "good", "success", "healthy", "ok"}
-            else ""
-        )
         fields.append({
             "type": "mrkdwn",
             "text": _truncate(
-                f"*{_escape_mrkdwn(label)}*\n{indicator}{_escape_mrkdwn(value)}",
+                f"*{_escape_mrkdwn(label)}*\n{_escape_mrkdwn(value)}",
                 MAX_FIELD_TEXT,
             ),
         })
@@ -1267,6 +1248,24 @@ def build_slack_notification_payload(
         "text": f"{title} · {severity}",
         "blocks": blocks[:MAX_BLOCKS],
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
