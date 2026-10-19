@@ -1,7 +1,11 @@
+import json
+
 import app.services.teams_card_renderer as teams_card_renderer
 
 from app.services.teams_card_renderer import (
     _render_generic_block,
+    _render_metrics_block,
+    _group_metrics,
     build_teams_notification_payload,
 )
 from app.services.slack_block_renderer import (
@@ -37,6 +41,203 @@ def test_generic_v2_dispatcher_supports_all_block_types():
 
     for block in blocks:
         assert _render_generic_block(block), block["type"]
+
+
+def test_metrics_automatically_use_compact_balanced_rows():
+    cases = [
+        (1, [1]),
+        (2, [2]),
+        (3, [3]),
+        (4, [4]),
+        (5, [3, 2]),
+        (6, [3, 3]),
+        (7, [4, 3]),
+    ]
+    metric_templates = [
+        ("Estimated Repair Cost", "US$45,000"),
+        ("Expected Maintenance Downtime", "72 hours"),
+        ("Vessel Readiness Score", "9/10"),
+        ("Uptime", "1 sec"),
+        (
+            "Estimated Operational Financial Exposure",
+            "US$1,250,000.75",
+        ),
+        ("Deadline", "2026-10-20 23:59 UTC"),
+        ("Seventh Metric", "Value 7"),
+    ]
+
+    for metric_count, expected_row_sizes in cases:
+        metrics = [
+            {
+                "label": label,
+                "value": value,
+            }
+            for label, value in metric_templates[:metric_count]
+        ]
+        rendered = _render_metrics_block(
+            {
+                "type": "metrics",
+                "title": "Risk metrics",
+                "items": metrics,
+            }
+        )
+
+        assert rendered[0]["text"] == "RISK METRICS"
+        rows = rendered[1:]
+        assert [len(row["columns"]) for row in rows] == expected_row_sizes
+        assert [
+            column["items"][0]["items"][-1]["text"]
+            for row in rows
+            for column in row["columns"]
+        ] == [value for _, value in metric_templates[:metric_count]]
+        assert [
+            column["items"][0]["items"][0]["text"]
+            for row in rows
+            for column in row["columns"]
+        ] == [label.upper() for label, _ in metric_templates[:metric_count]]
+
+        for row in rows:
+            assert row["type"] == "ColumnSet"
+            for column in row["columns"]:
+                assert column["width"] == "stretch"
+                container = column["items"][0]
+                assert container["type"] == "Container"
+                assert container["style"] == "emphasis"
+                assert container["items"][0]["wrap"] is True
+                assert container["items"][0]["spacing"] == "None"
+                assert container["items"][1]["wrap"] is True
+                assert container["items"][1]["spacing"] == "Small"
+
+
+def test_metrics_respect_valid_explicit_columns_and_fall_back_safely():
+    items = [
+        {"label": f"Metric {index}", "value": index}
+        for index in range(1, 7)
+    ]
+
+    assert [len(group) for group in _group_metrics(items, 1)] == [1] * 6
+    assert [len(group) for group in _group_metrics(items, "2")] == [2, 2, 2]
+    assert [len(group) for group in _group_metrics(items, 4)] == [4, 2]
+    assert [len(group) for group in _group_metrics(items + items[:4])] == [4, 3, 3]
+
+    for invalid_columns in (0, -1, 5, "not-a-number", 2.5, True):
+        assert [len(group) for group in _group_metrics(items[:4], invalid_columns)] == [4]
+
+    rendered = _render_metrics_block(
+        {"type": "metrics", "columns": 2, "items": items}
+    )
+    assert [len(row["columns"]) for row in rendered[1:]] == [2, 2, 2]
+    assert [
+        column["items"][0]["items"][-1]["text"]
+        for row in rendered[1:]
+        for column in row["columns"]
+    ] == [str(index) for index in range(1, 7)]
+
+
+def test_metrics_preserve_status_colors_special_characters_and_safe_values():
+    rendered = _render_metrics_block(
+        {
+            "type": "metrics",
+            "items": [
+                {
+                    "label": "Critical <&>",
+                    "value": "$1,000 & rising",
+                    "status": "critical",
+                },
+                {
+                    "label": "Warning / pending",
+                    "value": "50%",
+                    "status": "warning",
+                },
+                {"label": "Healthy", "value": "✓", "status": "healthy"},
+                {"label": "Information", "value": "R&D", "status": "info"},
+            ],
+        }
+    )
+
+    metric_values = [
+        column["items"][0]["items"][-1]
+        for row in rendered[1:]
+        for column in row["columns"]
+    ]
+    assert [item["text"] for item in metric_values] == [
+        "$1,000 & rising",
+        "50%",
+        "✓",
+        "R&D",
+    ]
+    assert [item["color"] for item in metric_values] == [
+        "Attention",
+        "Warning",
+        "Good",
+        "Accent",
+    ]
+    card = build_teams_notification_payload(
+        {
+            "schema_version": 2,
+            "views": {
+                "notification": {
+                    "blocks": [
+                        {
+                            "type": "metrics",
+                            "items": [
+                                {
+                                    "label": "Critical <&>",
+                                    "value": "$1,000 & rising",
+                                    "status": "critical",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+    )["attachments"][0]["content"]
+    assert card["type"] == "AdaptiveCard"
+    assert card["version"] == "1.5"
+    assert any(
+        column["items"][0].get("style") == "emphasis"
+        for row in card["body"]
+        if row.get("type") == "ColumnSet"
+        for column in row["columns"]
+    )
+    assert json.loads(json.dumps(card)) == card
+
+
+def test_metrics_ignore_malformed_items_and_handle_missing_labels_and_values():
+    rendered = _render_metrics_block(
+        {
+            "type": "metrics",
+            "items": [
+                None,
+                "not a metric",
+                {"value": "42"},
+                {"label": "", "value": ""},
+                {"label": "Unavailable", "value": None},
+            ],
+        }
+    )
+
+    columns = [
+        column
+        for row in rendered[1:]
+        for column in row["columns"]
+    ]
+    assert len(columns) == 3
+    assert columns[0]["items"][0]["items"] == [
+        {
+            "type": "TextBlock",
+            "text": "42",
+            "weight": "Bolder",
+            "size": "Medium",
+            "color": "Default",
+            "wrap": True,
+            "spacing": "None",
+        }
+    ]
+    assert columns[1]["items"][0]["items"][-1]["text"] == "-"
+    assert columns[2]["items"][0]["items"][-1]["text"] == "-"
+    assert columns[2]["items"][0]["items"][0]["text"] == "UNAVAILABLE"
 
 
 def test_generic_v2_callout_is_a_direct_text_block_in_order():

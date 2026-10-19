@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 
@@ -171,6 +172,49 @@ def _chunk(items: list[Any], size: int) -> list[list[Any]]:
 
 
 
+
+
+def _group_metrics(
+    items: list[dict[str, Any]],
+    columns: Any = None,
+) -> list[list[dict[str, Any]]]:
+    """Group metrics without relying on Teams host width information.
+
+    A valid explicit column count (one through four) takes precedence. When it
+    is absent or invalid, keep small metric sets on one row and balance larger
+    sets across rows with no more than four cards per row.
+    """
+    columns_per_row: int | None = None
+    if not isinstance(columns, bool):
+        try:
+            parsed_columns = int(columns)
+        except (TypeError, ValueError):
+            parsed_columns = 0
+        if (
+            1 <= parsed_columns <= 4
+            and not (
+                isinstance(columns, float)
+                and not columns.is_integer()
+            )
+        ):
+            columns_per_row = parsed_columns
+
+    if columns_per_row is not None:
+        return _chunk(items, columns_per_row)
+
+    metric_count = len(items)
+    if metric_count <= 4:
+        return [items] if items else []
+
+    row_count = (metric_count + 3) // 4
+    base_row_size, extra_items = divmod(metric_count, row_count)
+    groups: list[list[dict[str, Any]]] = []
+    start = 0
+    for row_index in range(row_count):
+        row_size = base_row_size + (1 if row_index < extra_items else 0)
+        groups.append(items[start : start + row_size])
+        start += row_size
+    return groups
 
 
 def _section_heading(
@@ -568,31 +612,12 @@ def _render_metrics_block(
 
 
 
-    columns_per_row = block.get("columns", 2)
-
-
-
-    try:
-
-        columns_per_row = int(columns_per_row)
-
-    except (TypeError, ValueError):
-
-        columns_per_row = 2
-
-
-
-    columns_per_row = max(
-
-        1,
-
-        min(columns_per_row, 3),
-
+    groups = _group_metrics(
+        items,
+        block.get("columns") if "columns" in block else None,
     )
 
-
-
-    for group in _chunk(items, columns_per_row):
+    for group in groups:
 
         columns: list[dict[str, Any]] = []
 
@@ -624,7 +649,31 @@ def _render_metrics_block(
 
             status = metric.get("status")
 
+            metric_items: list[dict[str, Any]] = []
 
+            if label:
+                metric_items.append(
+                    {
+                        "type": "TextBlock",
+                        "text": label.upper(),
+                        "size": "Small",
+                        "isSubtle": True,
+                        "wrap": True,
+                        "spacing": "None",
+                    }
+                )
+
+            metric_items.append(
+                {
+                    "type": "TextBlock",
+                    "text": value,
+                    "weight": "Bolder",
+                    "size": "Medium",
+                    "color": _status_color(status),
+                    "wrap": True,
+                    "spacing": "Small" if label else "None",
+                }
+            )
 
             columns.append(
 
@@ -635,37 +684,11 @@ def _render_metrics_block(
                     "width": "stretch",
 
                     "items": [
-
                         {
-
-                            "type": "TextBlock",
-
-                            "text": label.upper(),
-
-                            "size": "Small",
-
-                            "isSubtle": True,
-
-                            "wrap": True,
-
-                        },
-
-                        {
-
-                            "type": "TextBlock",
-
-                            "text": value,
-
-                            "weight": "Bolder",
-
-                            "size": "Medium",
-
-                            "color": _status_color(status),
-
-                            "wrap": True,
-
-                        },
-
+                            "type": "Container",
+                            "style": "emphasis",
+                            "items": metric_items,
+                        }
                     ],
 
                 }
@@ -797,33 +820,50 @@ def _render_bullet_list_block(
 def _render_callout_block(
     block: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
+    """Render callouts as highlighted Adaptive Card containers.
+
+    Adaptive Card Container.style supports: default, emphasis, good,
+    attention, warning, accent. Exact colors depend on the Teams theme.
+    """
     title = _safe_text(block.get("title"))
     text = _safe_text(block.get("text") or block.get("value") or block.get("content"))
+    if not title and not text:
+        return []
 
+    status_color = _status_color(block.get("status"))
+    # Unspecified callouts are warnings by default, matching the builder's
+    # highlighted appearance; explicit status chooses the semantic style.
+    container_style = (
+        "warning" if status_color == "Default" else status_color.lower()
+    )
+
+    items: list[dict[str, Any]] = []
     if title:
-        heading = _section_heading(title)
-        if heading:
-            result.append(heading)
+        items.append({
+            "type": "TextBlock",
+            "text": title.upper(),
+            "weight": "Bolder",
+            "size": "Small",
+            "wrap": True,
+            "spacing": "None",
+        })
+    if text:
+        text_block: dict[str, Any] = {
+            "type": "TextBlock",
+            "text": text,
+            "wrap": True,
+            "spacing": "Small" if title else "None",
+        }
+        if block.get("bold") is True:
+            text_block["weight"] = "Bolder"
+        items.append(text_block)
 
-    if not text:
-        return result
-
-    text_block: dict[str, Any] = {
-        "type": "TextBlock",
-        "text": text,
-        "wrap": True,
-        "spacing": "Small" if title else "Medium",
-    }
-    if block.get("bold") is True:
-        text_block["weight"] = "Bolder"
-
-    color = _status_color(block.get("status"))
-    if color != "Default":
-        text_block["color"] = color
-
-    result.append(text_block)
-    return result
+    return [{
+        "type": "Container",
+        "style": container_style,
+        "spacing": "Medium",
+        "items": items,
+    }]
 
 
 def _render_numbered_list_block(
@@ -3478,3 +3518,8 @@ def build_teams_notification_payload(
         ],
 
     }
+
+
+
+
+
