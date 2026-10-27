@@ -20,6 +20,7 @@ from app.schemas.risk import (
     RiskDeleteResponse,
     RiskDetailResponse,
     RiskListResponse,
+    RiskUpdate,
     RiskUpdateResponse,
 )
 
@@ -78,14 +79,14 @@ async def create_risk(
 # UPDATE RISK
 # =========================================================
 
-@router.put(
+@router.patch(
     "/{risk_id}",
     response_model=RiskUpdateResponse,
     status_code=status.HTTP_200_OK,
 )
 async def update_risk(
     risk_id: str,
-    payload: RiskCreate,
+    payload: RiskUpdate,
     service: RiskService = Depends(get_risk_service),
 ):
     try:

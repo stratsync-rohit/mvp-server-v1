@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pymongo.errors import DuplicateKeyError
 
 from app.exceptions import ConflictError, NotFoundError, ValidationAppError
-from app.schemas.risk import RiskCreate
+from app.schemas.risk import RiskCreate, RiskUpdate
 from app.utils.mongo_serializer import serialize_mongo_document
 
 
@@ -113,17 +113,27 @@ class RiskService:
     async def update_risk(
         self,
         risk_id: str,
-        payload: RiskCreate,
+        payload: RiskUpdate,
     ):
         """
-        Replace/update an existing V1 or V2 risk while
-        preserving server-owned fields.
+        Partially update an existing V1 or V2 risk while preserving
+        server-owned fields.
         """
 
-        if payload.risk_id != risk_id:
+        if payload.risk_id is not None and payload.risk_id != risk_id:
             raise ValidationAppError(
                 "Risk ID cannot be changed"
             )
+
+        document = payload.model_dump(
+            exclude_unset=True,
+        )
+
+        # The canonical identifier is defined by the path, never by the body.
+        document.pop("risk_id", None)
+
+        if not document:
+            raise ValidationAppError("No fields provided for update")
 
         existing = await self.risk_repository.get_risk_by_risk_id(
             risk_id
@@ -132,14 +142,12 @@ class RiskService:
         if existing is None:
             raise NotFoundError("Risk not found")
 
-        document = payload.model_dump(
-            mode="python",
-            exclude_unset=True,
-        )
-
         document.pop("_id", None)
         document.pop("created_at", None)
         document.pop("updated_at", None)
+
+        if not document:
+            raise ValidationAppError("No fields provided for update")
 
         self._normalize_document(
             document,

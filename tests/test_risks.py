@@ -399,7 +399,7 @@ async def test_update_replaces_and_clears_associated_risk_ids(
     risk_id = canonical_risk_payload["risk_id"]
 
     canonical_risk_payload["associated_risk_ids"] = ["RSK-ASSOC-0001"]
-    replaced = await client.put(
+    replaced = await client.patch(
         f"/api/risks/{risk_id}",
         json=canonical_risk_payload,
     )
@@ -409,7 +409,7 @@ async def test_update_replaces_and_clears_associated_risk_ids(
     assert stored["associated_risk_ids"] == ["RSK-ASSOC-0001"]
 
     canonical_risk_payload["associated_risk_ids"] = []
-    cleared = await client.put(
+    cleared = await client.patch(
         f"/api/risks/{risk_id}",
         json=canonical_risk_payload,
     )
@@ -586,7 +586,7 @@ async def test_update_canonical_risk_preserves_identity_and_cleans_steps(
     canonical_risk_payload["_id"] = "client-controlled-id"
     canonical_risk_payload["created_at"] = "2000-01-01T00:00:00Z"
 
-    response = await client.put(
+    response = await client.patch(
         f"/api/risks/{canonical_risk_payload['risk_id']}",
         json=canonical_risk_payload,
     )
@@ -628,7 +628,7 @@ async def test_update_accepts_canonical_step_without_inventing_description(
         }
     ]
 
-    response = await client.put(
+    response = await client.patch(
         f"/api/risks/{risk_id}", json=canonical_risk_payload
     )
 
@@ -649,7 +649,7 @@ async def test_update_rejects_risk_id_change(client, canonical_risk_payload):
     original_id = canonical_risk_payload["risk_id"]
     canonical_risk_payload["risk_id"] = "RSK-DIFFERENT-ID"
 
-    response = await client.put(
+    response = await client.patch(
         f"/api/risks/{original_id}", json=canonical_risk_payload
     )
 
@@ -657,11 +657,87 @@ async def test_update_rejects_risk_id_change(client, canonical_risk_payload):
     assert response.json() == {"detail": "Risk ID cannot be changed"}
 
 
-async def test_update_unknown_risk_returns_404(client, canonical_risk_payload):
-    canonical_risk_payload["risk_id"] = "RSK-UNKNOWN-EDIT"
+async def test_patch_title_only_updates_only_title(
+    client, mongo_db, canonical_risk_payload
+):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    risk_id = canonical_risk_payload["risk_id"]
+    before = await mongo_db["risks"].find_one({"risk_id": risk_id})
 
-    response = await client.put(
-        "/api/risks/RSK-UNKNOWN-EDIT", json=canonical_risk_payload
+    response = await client.patch(
+        f"/api/risks/{risk_id}",
+        json={"title": "ROHIT PATCH TEST SUCCESS"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Risk updated successfully",
+        "risk_id": risk_id,
+    }
+    stored = await mongo_db["risks"].find_one({"risk_id": risk_id})
+    assert stored["title"] == "ROHIT PATCH TEST SUCCESS"
+    assert stored["severity"] == before["severity"]
+    assert stored["metadata"] == before["metadata"]
+    assert stored["updated_at"] >= before["updated_at"]
+
+
+async def test_patch_severity_only_updates_severity_fields(
+    client, mongo_db, canonical_risk_payload
+):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    risk_id = canonical_risk_payload["risk_id"]
+    before = await mongo_db["risks"].find_one({"risk_id": risk_id})
+
+    response = await client.patch(
+        f"/api/risks/{risk_id}",
+        json={"severity": "high", "severity_label": "High"},
+    )
+
+    assert response.status_code == 200
+    stored = await mongo_db["risks"].find_one({"risk_id": risk_id})
+    assert stored["severity"] == "high"
+    assert stored["severity_label"] == "High"
+    assert stored["title"] == before["title"]
+
+
+async def test_patch_metadata_only_updates_metadata(
+    client, mongo_db, canonical_risk_payload
+):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    risk_id = canonical_risk_payload["risk_id"]
+    before = await mongo_db["risks"].find_one({"risk_id": risk_id})
+
+    response = await client.patch(
+        f"/api/risks/{risk_id}",
+        json={"metadata": {"scenario": "patch_test"}},
+    )
+
+    assert response.status_code == 200
+    stored = await mongo_db["risks"].find_one({"risk_id": risk_id})
+    assert stored["metadata"] == {"scenario": "patch_test"}
+    assert stored["title"] == before["title"]
+
+
+async def test_patch_with_no_fields_returns_400(client, canonical_risk_payload):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+
+    response = await client.patch(
+        f"/api/risks/{canonical_risk_payload['risk_id']}",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "No fields provided for update"}
+
+
+async def test_update_unknown_risk_returns_404(client, canonical_risk_payload):
+    response = await client.patch(
+        "/api/risks/RSK-UNKNOWN-EDIT",
+        json={"title": "Unknown risk"},
     )
 
     assert response.status_code == 404
