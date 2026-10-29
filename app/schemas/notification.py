@@ -1,6 +1,9 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.risk import RiskCreate
 
 
 class NotificationTriggerRequest(BaseModel):
@@ -32,6 +35,23 @@ class NotificationTriggerResponse(BaseModel):
     success: bool = True
     message: str
     data: NotificationTriggerData
+
+
+class TeamsPayloadPreviewRequest(BaseModel):
+    """An unsaved or currently edited risk to render without delivery."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    risk: RiskCreate
+
+
+class TeamsPayloadPreviewResponse(BaseModel):
+    bytes: int
+    kb: float
+    limit_bytes: int
+    limit_kb: int
+    too_large: bool
+    measurement: Literal["rendered-teams-payload"]
 
 
 class NotificationHistoryItem(BaseModel):

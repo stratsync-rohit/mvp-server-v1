@@ -1,4 +1,5 @@
 
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import (
@@ -8,6 +9,52 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+def _validate_reported_date(
+    value: datetime | str | None,
+) -> datetime | None:
+    """Parse and normalize a creator-supplied, timezone-aware timestamp."""
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        normalized_value = value.strip()
+        if "T" not in normalized_value:
+            raise ValueError(
+                "reported_date must be an ISO 8601 datetime"
+            )
+
+        if normalized_value.endswith(("Z", "z")):
+            normalized_value = normalized_value[:-1] + "+00:00"
+
+        try:
+            reported_date = datetime.fromisoformat(
+                normalized_value
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "reported_date must be an ISO 8601 datetime"
+            ) from exc
+    elif isinstance(value, datetime):
+        reported_date = value
+    else:
+        raise ValueError(
+            "reported_date must be an ISO 8601 datetime"
+        )
+
+    if (
+        reported_date.tzinfo is None
+        or reported_date.utcoffset() is None
+    ):
+        raise ValueError("reported_date must include a timezone")
+
+    reported_date = reported_date.astimezone(timezone.utc)
+
+    if reported_date > datetime.now(timezone.utc):
+        raise ValueError("reported_date cannot be in the future")
+
+    return reported_date
 
 
 # ============================================================
@@ -224,6 +271,7 @@ class RiskCreate(CanonicalRiskModel):
     mitigation: RiskMitigation | None = None
     actions: list[dict[str, Any]] | None = None
     detected_time: str | None = None
+    reported_date: datetime | None = None
 
     # --------------------------------------------------------
     # V2 fields
@@ -313,6 +361,14 @@ class RiskCreate(CanonicalRiskModel):
             raise ValueError("severity must not be blank")
 
         return value
+
+    @field_validator("reported_date", mode="before")
+    @classmethod
+    def validate_reported_date(
+        cls,
+        value: datetime | str | None,
+    ) -> datetime | None:
+        return _validate_reported_date(value)
 
     @model_validator(mode="after")
     def validate_schema_version(self):
@@ -409,6 +465,7 @@ class RiskUpdate(CanonicalRiskModel):
     actions: list[dict[str, Any]] | None = None
 
     detected_time: str | None = None
+    reported_date: datetime | None = None
 
     # --------------------------------------------------------
     # V2 / Generic fields
@@ -557,6 +614,14 @@ class RiskUpdate(CanonicalRiskModel):
 
         return normalized
 
+    @field_validator("reported_date", mode="before")
+    @classmethod
+    def validate_optional_reported_date(
+        cls,
+        value: datetime | str | None,
+    ) -> datetime | None:
+        return _validate_reported_date(value)
+
 
 # ============================================================
 # RESPONSE MODELS
@@ -597,6 +662,8 @@ class RiskDocument(BaseModel):
 
     id: str
     risk_id: str
+    reported_date: datetime | None = None
+    elapsed_time: str | None = None
 
 
 class RiskListResponse(BaseModel):

@@ -5,6 +5,7 @@ from pymongo.errors import DuplicateKeyError
 from app.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.schemas.risk import RiskCreate, RiskUpdate
 from app.utils.mongo_serializer import serialize_mongo_document
+from app.utils.risk_time import calculate_elapsed_time
 
 
 class RiskService:
@@ -26,7 +27,7 @@ class RiskService:
         )
 
         return [
-            serialize_mongo_document(risk)
+            self._serialize_risk_for_response(risk)
             for risk in risks
         ]
 
@@ -36,7 +37,7 @@ class RiskService:
         if risk is None:
             raise ValueError("Risk not found")
 
-        return serialize_mongo_document(risk)
+        return self._serialize_risk_for_response(risk)
 
     async def get_risks_by_industry(self, industry_slug: str):
         if not await self.industry_repository.exists(industry_slug):
@@ -48,9 +49,39 @@ class RiskService:
         )
 
         return [
-            serialize_mongo_document(risk)
+            self._serialize_risk_for_response(risk)
             for risk in risks
         ]
+
+    @staticmethod
+    def _serialize_risk_for_response(risk: dict) -> dict:
+        """Serialize persisted data and add non-persisted time fields."""
+        serialized_risk = serialize_mongo_document(risk)
+        reported_date = risk.get("reported_date")
+
+        # BSON persists datetimes as UTC instants. The existing Mongo client
+        # returns BSON datetimes without tzinfo, so restore that UTC context
+        # before calculating or serializing this API-specific field.
+        if (
+            isinstance(reported_date, datetime)
+            and (
+                reported_date.tzinfo is None
+                or reported_date.utcoffset() is None
+            )
+        ):
+            reported_date = reported_date.replace(tzinfo=timezone.utc)
+
+        if isinstance(reported_date, datetime):
+            serialized_risk["reported_date"] = reported_date.isoformat()
+        else:
+            serialized_risk["reported_date"] = serialized_risk.get(
+                "reported_date"
+            )
+
+        serialized_risk["elapsed_time"] = calculate_elapsed_time(
+            reported_date
+        )
+        return serialized_risk
 
     async def create_risk(self, payload: RiskCreate):
         """

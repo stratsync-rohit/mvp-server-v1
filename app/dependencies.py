@@ -42,6 +42,9 @@ from app.services.dashboard_service import DashboardService
 from app.services.industry_service import IndustryService
 from app.services.n8n_service import N8nService
 from app.services.notification_service import NotificationService
+from app.services.teams_payload_preview_service import (
+    TeamsPayloadPreviewService,
+)
 from app.services.risk_service import RiskService
 from app.services.risk_destination_override_service import (
     RiskDestinationOverrideService,
@@ -362,3 +365,11 @@ def get_notification_service(
         n8n_service=n8n_service,
         slack_n8n_service=slack_n8n_service,
     )
+
+
+def get_teams_payload_preview_service(
+    notification_service: NotificationService = Depends(
+        get_notification_service
+    ),
+) -> TeamsPayloadPreviewService:
+    return TeamsPayloadPreviewService(notification_service)

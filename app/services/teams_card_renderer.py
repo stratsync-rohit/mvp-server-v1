@@ -1,10 +1,11 @@
 
 from __future__ import annotations
 
-
-
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from app.utils.risk_time import calculate_elapsed_time
 
 
 
@@ -45,6 +46,99 @@ def _safe_list(value: Any) -> list[Any]:
 def _safe_dict(value: Any) -> dict[str, Any]:
 
     return value if isinstance(value, dict) else {}
+
+
+def _reported_date_for_rendering(value: Any) -> datetime | None:
+    """Return a UTC-aware date from a stored or serialized risk value."""
+    if isinstance(value, str):
+        normalized_value = value.strip()
+        if normalized_value.endswith(("Z", "z")):
+            normalized_value = normalized_value[:-1] + "+00:00"
+
+        try:
+            value = datetime.fromisoformat(normalized_value)
+        except ValueError:
+            return None
+
+    if not isinstance(value, datetime):
+        return None
+
+    # BSON dates are UTC instants. The application's Mongo client returns
+    # them without tzinfo, so restore that storage convention for rendering.
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+
+    return value.astimezone(timezone.utc)
+
+
+def _format_reported_date(value: datetime | None) -> str:
+    if value is None:
+        return "Not specified"
+
+    kolkata_time = value.astimezone(ZoneInfo("Asia/Kolkata"))
+    day = str(kolkata_time.day)
+    hour = str(kolkata_time.hour % 12 or 12)
+    return (
+        f"{day} {kolkata_time.strftime('%b %Y')}, "
+        f"{hour}:{kolkata_time.strftime('%M %p')} IST"
+    )
+
+
+def _build_reported_date_elapsed_time_row(
+    risk: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the non-persisted timing summary displayed below the header."""
+    reported_date = _reported_date_for_rendering(
+        risk.get("reported_date")
+    )
+    elapsed_time = calculate_elapsed_time(reported_date)
+
+    return {
+        "type": "ColumnSet",
+        "spacing": "Small",
+        "columns": [
+            {
+                "type": "Column",
+                "width": "stretch",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "REPORTED DATE",
+                        "size": "Small",
+                        "isSubtle": True,
+                        "wrap": True,
+                        "spacing": "None",
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": _format_reported_date(reported_date),
+                        "wrap": True,
+                        "spacing": "Small",
+                    },
+                ],
+            },
+            {
+                "type": "Column",
+                "width": "stretch",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": "ELAPSED TIME",
+                        "size": "Small",
+                        "isSubtle": True,
+                        "wrap": True,
+                        "spacing": "None",
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": elapsed_time or "Not available",
+                        "wrap": True,
+                        "spacing": "Small",
+                    },
+                ],
+            },
+        ],
+    }
 
 
 
@@ -2903,6 +2997,14 @@ def _build_v2_card(
 
 
 
+    card_body.append(
+
+        _build_reported_date_elapsed_time_row(risk)
+
+    )
+
+
+
     if summary:
 
         card_body.append(
@@ -3244,6 +3346,13 @@ def _build_v1_card(
 
         )
 
+
+
+    card_body.append(
+
+        _build_reported_date_elapsed_time_row(risk)
+
+    )
 
 
     if summary:

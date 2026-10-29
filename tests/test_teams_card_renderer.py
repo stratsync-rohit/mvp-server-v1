@@ -1,4 +1,6 @@
 import json
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 
 import app.services.teams_card_renderer as teams_card_renderer
 
@@ -14,6 +16,112 @@ from app.services.slack_block_renderer import (
 from app.services.connected_risk_overview import (
     build_connected_risk_overview_rows,
 )
+from app.utils.risk_time import calculate_elapsed_time
+
+
+def _timing_summary_row(card):
+    return next(
+        element
+        for element in card["body"]
+        if element.get("type") == "ColumnSet"
+        and [
+            column["items"][0].get("text")
+            for column in element.get("columns", [])
+            if column.get("items")
+        ]
+        == ["REPORTED DATE", "ELAPSED TIME"]
+    )
+
+
+def _timing_summary_values(card):
+    row = _timing_summary_row(card)
+    return [column["items"][1]["text"] for column in row["columns"]]
+
+
+def test_timing_summary_formats_reported_date_and_recalculates_elapsed_time():
+    reported_date = datetime(2026, 10, 22, 12, 30, tzinfo=timezone.utc)
+    risk = {
+        "title": "Supplier delivery disruption",
+        "severity": "critical",
+        "summary": "A supplier has missed its delivery commitment.",
+        "reported_date": reported_date,
+    }
+
+    card = build_teams_notification_payload(risk)["attachments"][0][
+        "content"
+    ]
+
+    assert _timing_summary_values(card) == [
+        "22 Oct 2026, 6:00 PM IST",
+        calculate_elapsed_time(reported_date),
+    ]
+    assert [
+        element["type"] for element in card["body"][:4]
+    ] == ["ColumnSet", "ColumnSet", "ColumnSet", "TextBlock"]
+
+
+def test_timing_summary_accepts_serialized_utc_dates_and_does_not_mutate_risk():
+    reported_date = datetime.now(timezone.utc) - timedelta(hours=27)
+    risk = {
+        "schema_version": 2,
+        "title": "Inventory risk",
+        "severity_label": "High",
+        "reported_date": reported_date.isoformat().replace("+00:00", "Z"),
+        "views": {"notification": {"blocks": []}},
+    }
+    original_risk = deepcopy(risk)
+
+    card = build_teams_notification_payload(risk)["attachments"][0][
+        "content"
+    ]
+
+    assert _timing_summary_values(card)[0].endswith("IST")
+    assert _timing_summary_values(card)[1] == "1 day 3 hours"
+    assert risk == original_risk
+
+
+def test_timing_summary_uses_fallbacks_once_when_reported_date_is_missing():
+    risk = {
+        "title": "Legacy risk",
+        "severity": "high",
+        "summary": "Existing risk without a reported date.",
+        "sender": {"timestamp": "09:42 AM IST"},
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+    card = build_teams_notification_payload(risk)["attachments"][0][
+        "content"
+    ]
+
+    assert _timing_summary_values(card) == ["Not specified", "Not available"]
+    rendered_card = str(card)
+    assert rendered_card.count("REPORTED DATE") == 1
+    assert rendered_card.count("ELAPSED TIME") == 1
+
+
+def test_timing_summary_preserves_existing_v1_actions():
+    card = build_teams_notification_payload(
+        {
+            "title": "Actionable risk",
+            "severity": "high",
+            "reported_date": datetime.now(timezone.utc),
+            "summary": "Summary remains below the timing summary.",
+            "details": {"section_title": "DETAILS"},
+            "mitigation": {
+                "summary": "Mitigation summary",
+                "steps": [],
+            },
+        }
+    )["attachments"][0]["content"]
+
+    assert [action["title"] for action in card["actions"]] == [
+        "View Details",
+        "Mitigation Plan",
+    ]
+    assert card["body"][3]["text"] == (
+        "Summary remains below the timing summary."
+    )
 
 
 def test_generic_v2_dispatcher_supports_all_block_types():

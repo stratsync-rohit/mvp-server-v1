@@ -159,11 +159,9 @@ class NotificationService:
             )
         )
 
-        effective_associated_risk_ids = (
-            await self._resolve_associated_risk_ids(
-                risk=risk,
-                canonical_risk_id=risk_id,
-            )
+        risk_payload = await self.prepare_notification_risk_payload(
+            risk=risk,
+            canonical_risk_id=risk_id,
         )
 
         # =========================================================
@@ -268,45 +266,6 @@ class NotificationService:
             await self.notification_repository
             .create_notification(
                 notification_data
-            )
-        )
-
-        # =========================================================
-        # PREPARE GENERIC RESOLVED RISK PAYLOAD
-        # =========================================================
-
-        risk_payload = serialize_mongo_document(
-            risk
-        )
-
-        risk_payload.pop(
-            "id",
-            None,
-        )
-
-        risk_payload[
-            "associated_risk_ids"
-        ] = effective_associated_risk_ids
-
-        associated_risk_documents = []
-        if effective_associated_risk_ids:
-            associated_risk_documents = (
-                await self.risk_repository.get_risks_by_risk_ids(
-                    effective_associated_risk_ids
-                )
-            )
-
-        risk_payload[
-            "connected_risk_overview"
-        ] = build_connected_risk_overview_rows(
-            effective_associated_risk_ids,
-            associated_risk_documents,
-            canonical_risk_id=risk_id,
-        )
-
-        risk_payload = (
-            normalize_mitigation_plan_for_notification(
-                risk_payload
             )
         )
 
@@ -442,6 +401,46 @@ class NotificationService:
                 sent_notification["sent_at"]
             ),
         }
+
+    async def prepare_notification_risk_payload(
+        self,
+        risk: dict,
+        canonical_risk_id: str | None = None,
+    ) -> dict:
+        """Build the resolved, renderer-ready risk payload without sending it.
+
+        This is shared by delivery and preview paths so connected-risk rows and
+        mitigation normalization cannot diverge from the rendered notification.
+        """
+        canonical_risk_id = canonical_risk_id or risk.get("risk_id")
+        effective_associated_risk_ids = (
+            await self._resolve_associated_risk_ids(
+                risk=risk,
+                canonical_risk_id=canonical_risk_id,
+            )
+        )
+
+        risk_payload = serialize_mongo_document(risk)
+        risk_payload.pop("id", None)
+        risk_payload["associated_risk_ids"] = effective_associated_risk_ids
+
+        associated_risk_documents = []
+        if effective_associated_risk_ids:
+            associated_risk_documents = (
+                await self.risk_repository.get_risks_by_risk_ids(
+                    effective_associated_risk_ids
+                )
+            )
+
+        risk_payload["connected_risk_overview"] = (
+            build_connected_risk_overview_rows(
+                effective_associated_risk_ids,
+                associated_risk_documents,
+                canonical_risk_id=canonical_risk_id,
+            )
+        )
+
+        return normalize_mitigation_plan_for_notification(risk_payload)
 
     async def _resolve_associated_risk_ids(
         self,

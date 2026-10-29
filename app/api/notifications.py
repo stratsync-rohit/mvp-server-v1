@@ -1,19 +1,49 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies import get_notification_service
+from app.dependencies import (
+    get_notification_service,
+    get_teams_payload_preview_service,
+)
 from app.exceptions import AppError, UpstreamError, UpstreamTimeoutError
 from app.schemas.notification import (
     NotificationHistoryResponse,
     NotificationTriggerRequest,
-    NotificationTriggerResponse
+    NotificationTriggerResponse,
+    TeamsPayloadPreviewRequest,
+    TeamsPayloadPreviewResponse,
 )
 from app.services.notification_service import NotificationService
+from app.services.teams_payload_preview_service import (
+    TeamsPayloadPreviewService,
+)
 
 
 router = APIRouter(
     prefix="/api/notifications",
     tags=["Notifications"]
 )
+
+
+@router.post(
+    "/preview-size",
+    response_model=TeamsPayloadPreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def preview_teams_payload_size(
+    payload: TeamsPayloadPreviewRequest,
+    service: TeamsPayloadPreviewService = Depends(
+        get_teams_payload_preview_service
+    ),
+):
+    try:
+        return await service.preview_size(
+            payload.risk.model_dump(mode="python"),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to preview Teams notification payload size",
+        ) from exc
 
 
 @router.post(

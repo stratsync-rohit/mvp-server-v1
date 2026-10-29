@@ -5,6 +5,7 @@ import pytest_asyncio
 from bson import ObjectId
 
 from app.repositories.risk_repository import RiskRepository
+from app.utils.risk_time import calculate_elapsed_time
 
 pytestmark = pytest.mark.asyncio
 
@@ -474,6 +475,144 @@ async def test_risk_repository_reverse_lookup_returns_empty_for_no_match(
     )
 
     assert risks == []
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected"),
+    [
+        (timedelta(minutes=45), "0 hours"),
+        (timedelta(hours=5, minutes=50), "5 hours"),
+        (timedelta(hours=27), "1 day 3 hours"),
+        (timedelta(hours=63), "2 days 15 hours"),
+    ],
+)
+async def test_calculate_elapsed_time_uses_completed_hours(duration, expected):
+    reported_date = datetime.now(timezone.utc) - duration
+
+    assert calculate_elapsed_time(reported_date) == expected
+
+
+async def test_calculate_elapsed_time_converts_timezone_aware_dates_to_utc():
+    india_timezone = timezone(timedelta(hours=5, minutes=30))
+    reported_date = datetime.now(india_timezone) - timedelta(hours=27)
+
+    assert calculate_elapsed_time(reported_date) == "1 day 3 hours"
+
+
+async def test_calculate_elapsed_time_handles_missing_invalid_and_future_dates():
+    assert calculate_elapsed_time(None) is None
+    assert calculate_elapsed_time(datetime.now()) is None
+    assert calculate_elapsed_time(
+        datetime.now(timezone.utc) + timedelta(hours=1)
+    ) is None
+
+
+async def test_create_and_retrieve_risk_with_reported_date(
+    client,
+    mongo_db,
+    canonical_risk_payload,
+):
+    reported_date = (
+        datetime.now(timezone.utc) - timedelta(hours=27)
+    ).astimezone(timezone(timedelta(hours=5, minutes=30)))
+    canonical_risk_payload["reported_date"] = reported_date.isoformat()
+
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert created.status_code == 201
+    stored = await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    )
+    assert isinstance(stored["reported_date"], datetime)
+
+    detail = await client.get(
+        f"/api/risks/{canonical_risk_payload['risk_id']}"
+    )
+    assert detail.status_code == 200
+    risk = detail.json()["data"]
+    assert abs(
+        (
+            datetime.fromisoformat(risk["reported_date"])
+            - reported_date
+        ).total_seconds()
+    ) < 0.001
+    assert risk["elapsed_time"] == "1 day 3 hours"
+
+    risk_list = await client.get("/api/risks")
+    listed_risk = next(
+        item
+        for item in risk_list.json()["data"]
+        if item["risk_id"] == canonical_risk_payload["risk_id"]
+    )
+    assert listed_risk["reported_date"] == risk["reported_date"]
+    assert listed_risk["elapsed_time"] == "1 day 3 hours"
+
+
+@pytest.mark.parametrize(
+    "reported_date",
+    [
+        "not-a-date",
+        "2026-10-22",
+        "2026-10-22T18:00:00",
+    ],
+)
+async def test_create_rejects_invalid_or_timezone_naive_reported_date(
+    client,
+    canonical_risk_payload,
+    reported_date,
+):
+    canonical_risk_payload["reported_date"] = reported_date
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 422
+
+
+async def test_create_rejects_future_reported_date(
+    client,
+    canonical_risk_payload,
+):
+    canonical_risk_payload["reported_date"] = (
+        datetime.now(timezone.utc) + timedelta(hours=1)
+    ).isoformat()
+
+    response = await client.post("/api/risks", json=canonical_risk_payload)
+
+    assert response.status_code == 422
+
+
+async def test_legacy_risk_responses_include_null_time_fields(client, risk_data):
+    detail = await client.get("/api/risks/TEST-DIST-HIGH")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["reported_date"] is None
+    assert detail.json()["data"]["elapsed_time"] is None
+
+    risk_list = await client.get("/api/risks")
+    listed_risk = next(
+        item
+        for item in risk_list.json()["data"]
+        if item["risk_id"] == "TEST-DIST-HIGH"
+    )
+    assert listed_risk["title"] == "Supplier reliability changed"
+    assert listed_risk["reported_date"] is None
+    assert listed_risk["elapsed_time"] is None
+
+
+async def test_update_persists_reported_date(client, mongo_db, canonical_risk_payload):
+    created = await client.post("/api/risks", json=canonical_risk_payload)
+    assert created.status_code == 201
+    reported_date = datetime.now(timezone.utc) - timedelta(hours=5)
+
+    response = await client.patch(
+        f"/api/risks/{canonical_risk_payload['risk_id']}",
+        json={"reported_date": reported_date.isoformat()},
+    )
+
+    assert response.status_code == 200
+    stored = await mongo_db["risks"].find_one(
+        {"risk_id": canonical_risk_payload["risk_id"]}
+    )
+    assert isinstance(stored["reported_date"], datetime)
 
 
 async def test_create_accepts_canonical_step_without_inventing_description(
